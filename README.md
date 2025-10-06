@@ -1,6 +1,6 @@
 # DHCP Sentinel
 
-DHCP Sentinel es una aplicación web basada en Flask diseñada para monitorear y gestionar las concesiones (leases) de DHCP en una red local. Proporciona una interfaz amigable para rastrear los dispositivos conectados, ver su estado y liberar proactivamente concesiones de IP para prevenir el agotamiento del pool de direcciones DHCP.
+DHCP Sentinel es un auditor de red que trabaja junto a tu servidor DHCP existente. Su misión es simple: recuperar direcciones IP no utilizadas para evitar que el pool de tu DHCP se agote. La aplicación identifica dispositivos que han estado inactivos por mucho tiempo o que pertenecen a una lista específica (ej. invitados) y envía una solicitud de liberación (DHCPRELEASE) en su nombre, manteniendo así el pool de direcciones IP limpio y disponible.
 
 ## Características
 
