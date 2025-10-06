@@ -1,0 +1,8 @@
+Flask==2.3.2
+Flask-SQLAlchemy==3.0.5
+Flask-Migrate==4.0.4
+python-nmap==0.7.1
+scapy==2.5.0
+psutil # scapy a veces lo necesita para info de interfaces
+Flask-Login==0.6.3
+Flask-Bcrypt==1.0.1
