@@ -68,3 +68,111 @@ Primero, asegúrate de tener Git, Python y Nmap instalados en tu sistema.
 ```bash
 sudo apt update
 sudo apt install -y git python3 python3-pip python3-venv nmap
+```
+
+### 2. Clonar el Repositorio
+
+Clona este repositorio en tu máquina local.
+
+```bash
+git clone https://github.com/soyunomas/dhcp-sentinel-backend.git
+cd dhcp-sentinel-backend
+```
+
+### 3. Configurar el Entorno de Python
+
+Crea y activa un entorno virtual para gestionar las dependencias.
+
+```bash
+# Crea el entorno virtual
+python3 -m venv venv
+
+# Actívalo
+source venv/bin/activate
+```
+
+### 4. Instalar Dependencias
+
+Instala todas las librerías de Python requeridas desde el archivo `requirements.txt`.
+
+```bash
+pip install -r requirements.txt
+```
+
+### 5. Configurar la Base de Datos
+
+Aplica las migraciones de la base de datos para crear el archivo `app.db` con el esquema correcto.
+
+```bash
+# Exporta la variable de entorno de Flask
+export FLASK_APP=run.py
+
+# Aplica las migraciones
+flask db upgrade
+```
+
+### 6. Crear el Usuario Administrador
+
+Necesitas crear el usuario administrador inicial para poder iniciar sesión. Ejecuta el shell de Flask y los siguientes comandos de Python.
+
+```bash
+# Inicia el shell
+flask shell
+```
+
+Ahora, dentro de la consola de Python:
+```python
+# Importa los módulos necesarios
+from app import db
+from app.models import User
+
+# Crea una nueva instancia de usuario (puedes cambiar 'admin' si lo deseas)
+u = User(username='admin')
+
+# Establece una contraseña segura (REEMPLAZA 'tu_contraseña_segura' con tu contraseña real)
+u.set_password('tu_contraseña_segura')
+
+# Añade a la sesión de la base de datos y confirma los cambios
+db.session.add(u)
+db.session.commit()
+
+# Sal del shell
+exit()
+```
+
+## Ejecutando la Aplicación
+
+La aplicación requiere que dos procesos se ejecuten en dos terminales diferentes, ambos con privilegios `sudo` para operaciones de red.
+
+**Advertencia de Seguridad:** Ejecutar procesos con `sudo` otorga privilegios elevados. Asegúrate de ejecutar esta aplicación en una red de confianza y en un sistema seguro.
+
+### Terminal 1: Ejecutar el Servidor Web
+
+```bash
+# Asegúrate de que tu entorno virtual está activo
+source venv/bin/activate
+
+# Inicia el servidor web de Flask
+sudo venv/bin/python run.py
+```
+Esto hará que la interfaz web esté disponible en `http://<ip-de-tu-servidor>:5001`.
+
+### Terminal 2: Ejecutar el Worker de Escaneo
+
+```bash
+# Asegúrate de que tu entorno virtual está activo
+source venv/bin/activate
+
+# Inicia el worker de escaneo y automatización en segundo plano
+sudo venv/bin/python scanner_worker.py
+```
+Este proceso se encargará del descubrimiento de dispositivos y las liberaciones automáticas de IP.
+
+### Configuración Final
+
+1.  Abre tu navegador web y navega a `http://127.0.0.1:5001`.
+2.  Inicia sesión con el nombre de usuario y la contraseña que creaste en el paso 6.
+3.  Ve a la pestaña **"Configuración"**.
+4.  **Crucialmente, actualiza los parámetros de red** (Subred a Escanear, IP del Servidor DHCP y especialmente la **Interfaz de Red**) para que coincidan con la configuración de tu red.
+5.  Revisa las reglas de automatización y el modo de simulación (Dry Run) según tus necesidades.
+6.  Guarda los cambios. La aplicación ya está completamente operativa.
