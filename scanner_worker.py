@@ -1,3 +1,5 @@
+# scanner_worker.py
+
 import time
 from datetime import datetime, timedelta, UTC
 from sqlalchemy import or_
@@ -28,15 +30,17 @@ def run_scan_cycle(app_config):
 def run_auto_release_cycle(app_config):
     """
     Busca dispositivos para liberar automáticamente, ya sea por inactividad o por
-    coincidir con la lista de MACs, y libera sus IPs si cumplen las condiciones.
+    coincidir con la lista de MACs, y libera (o simula liberar) sus IPs si cumplen las condiciones.
     """
     print("--- [!] Iniciando ciclo de liberación automática programado ---")
+    
+    if app_config.dry_run_enabled:
+        print("--- [!] MODO DRY RUN ACTIVADO: Solo se simularán las acciones. ---")
     
     candidates_to_release = set()
 
     # --- Criterio 1: Liberación por inactividad ---
     threshold_hours = app_config.auto_release_threshold_hours
-    # Esta comprobación ya está aquí, pero la mantenemos por si el usuario cambia el valor a 0 entre ciclos.
     if threshold_hours > 0:
         time_threshold = datetime.now(UTC) - timedelta(hours=threshold_hours)
         inactive_devices = Device.query.filter(
@@ -48,7 +52,6 @@ def run_auto_release_cycle(app_config):
             print(f"[*] Encontrados {len(inactive_devices)} dispositivo(s) por inactividad.")
             candidates_to_release.update(inactive_devices)
     else:
-        # Esto no debería ocurrir si la lógica del bucle principal es correcta, pero es una salvaguarda.
         print("[*] La liberación por inactividad está desactivada.")
 
     # --- Criterio 2: Liberación por lista de MACs ---
@@ -84,18 +87,22 @@ def run_auto_release_cycle(app_config):
         log_event(log_msg, 'INFO')
         db.session.commit()
         
-        success = perform_dhcp_release(
+        # --- LÓGICA ACTUALIZADA ---
+        success, was_dry_run = perform_dhcp_release(
             target_ip=device.ip_address,
             target_mac=device.mac_address,
             dhcp_server_ip=app_config.dhcp_server_ip,
-            interface=app_config.network_interface
+            interface=app_config.network_interface,
+            dry_run_enabled=app_config.dry_run_enabled
         )
         
         if success:
-            device.status = 'released'
-            db.session.commit()
-            log_event(f"IP {device.ip_address} liberada automáticamente.", 'INFO')
-            db.session.commit()
+            # Solo actualizamos el estado si NO fue un dry run
+            if not was_dry_run:
+                device.status = 'released'
+                db.session.commit()
+                log_event(f"IP {device.ip_address} liberada automáticamente.", 'INFO')
+                db.session.commit()
         else:
             log_event(f"Falló el intento de liberación automática para la IP {device.ip_address}", 'ERROR')
             db.session.commit()
@@ -110,9 +117,6 @@ if __name__ == '__main__':
         log_event("Iniciando el worker de escaneo y automatización.")
         db.session.commit()
 
-        # --- NUEVA LÓGICA DE TEMPORIZADOR ---
-        # Inicializamos la última comprobación a un tiempo pasado para forzar
-        # una ejecución en el primer ciclo si la configuración lo permite.
         last_release_check_time = datetime.now(UTC) - timedelta(days=1)
 
         while True:
@@ -120,21 +124,30 @@ if __name__ == '__main__':
                 current_time = datetime.now(UTC)
                 config = ApplicationConfig.get_settings()
                 
-                # 1. El ciclo de escaneo se ejecuta SIEMPRE (cada 60 segundos)
                 run_scan_cycle(config)
 
-                # 2. El ciclo de liberación automática SÓLO se ejecuta si ha pasado el tiempo configurado
                 release_interval_hours = config.auto_release_threshold_hours
-                if release_interval_hours > 0:
+                mac_list_is_configured = config.mac_auto_release_list.strip() != ""
+                
+                # Ejecutaremos el ciclo de liberación si alguna de las dos automatizaciones está activa
+                if release_interval_hours > 0 or mac_list_is_configured:
+                    # La lógica de temporización para inactividad sigue igual
                     time_since_last_check = current_time - last_release_check_time
-                    if time_since_last_check >= timedelta(hours=release_interval_hours):
+                    run_now = False
+                    if release_interval_hours > 0 and time_since_last_check >= timedelta(hours=release_interval_hours):
+                        run_now = True
+                    
+                    # La lista de MACs debe ejecutarse cada SCAN_INTERVAL_SECONDS
+                    if mac_list_is_configured:
+                        run_now = True
+
+                    if run_now:
                         run_auto_release_cycle(config)
-                        # Actualizamos la marca de tiempo de la última ejecución
                         last_release_check_time = current_time
                     else:
-                        print("[*] Aún no es tiempo para el ciclo de liberación automática.")
+                         print("[*] Aún no es tiempo para el ciclo de liberación por inactividad.")
                 else:
-                    print("[*] La liberación automática está desactivada (umbral <= 0).")
+                    print("[*] La liberación automática está desactivada (umbral <= 0 y lista de MACs vacía).")
 
                 print(f"--- Ciclos finalizados. Esperando {SCAN_INTERVAL_SECONDS} segundos... ---\n")
                 time.sleep(SCAN_INTERVAL_SECONDS)

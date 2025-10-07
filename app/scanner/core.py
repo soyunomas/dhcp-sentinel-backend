@@ -1,7 +1,9 @@
+# app/scanner/core.py
+
 import nmap
 import sys
 from scapy.all import *
-from datetime import datetime, UTC # <-- Importamos UTC
+from datetime import datetime, UTC 
 
 from app import db
 from app.models import Device, ApplicationConfig, LogEntry
@@ -58,13 +60,9 @@ def sync_devices_db(discovered_hosts):
         return
 
     print("[*] Sincronizando dispositivos con la base de datos...")
-    # --- LÍNEA ACTUALIZADA ---
     current_time = datetime.now(UTC)
     
-    processed_macs_in_scan = {}
-    for host in discovered_hosts:
-        processed_macs_in_scan[host['mac']] = host
-
+    processed_macs_in_scan = {host['mac']: host for host in discovered_hosts}
     all_db_devices_map = {device.mac_address: device for device in Device.query.all()}
     
     try:
@@ -75,17 +73,20 @@ def sync_devices_db(discovered_hosts):
             device = all_db_devices_map.get(mac)
             
             if device:
+                # Dispositivo existente: solo actualizamos last_seen y IP
                 device.ip_address = ip
                 device.last_seen = current_time
                 if device.status != 'active':
                     device.status = 'active'
             else:
+                # --- BLOQUE CORREGIDO: Nuevo dispositivo ---
+                # Ahora establecemos explícitamente first_seen y last_seen
                 new_device = Device(
                     ip_address=ip,
                     mac_address=mac,
                     vendor=vendor,
-                    first_seen=current_time,
-                    last_seen=current_time,
+                    first_seen=current_time, # <-- Añadido
+                    last_seen=current_time,  # <-- Añadido
                     status='active'
                 )
                 db.session.add(new_device)
@@ -101,10 +102,16 @@ def sync_devices_db(discovered_hosts):
         db.session.commit()
 
 
-def perform_dhcp_release(target_ip, target_mac, dhcp_server_ip, interface):
+def perform_dhcp_release(target_ip, target_mac, dhcp_server_ip, interface, dry_run_enabled=False):
     """
-    Construye y envía un paquete DHCPRELEASE suplantado.
+    Construye y envía un paquete DHCPRELEASE suplantado o simula la acción.
+    Devuelve una tupla: (success: bool, was_dry_run: bool)
     """
+    if dry_run_enabled:
+        log_event(f"[DRY RUN] Se habría liberado la IP {target_ip} (MAC: {target_mac})", 'INFO')
+        db.session.commit()
+        return True, True
+
     log_event(f"Intentando liberar la IP {target_ip} (MAC: {target_mac}) en la interfaz {interface}")
     
     try:
@@ -124,10 +131,10 @@ def perform_dhcp_release(target_ip, target_mac, dhcp_server_ip, interface):
         
         log_event(f"Paquete DHCPRELEASE enviado para IP {target_ip}", 'INFO')
         db.session.commit()
-        return True
+        return True, False
     except Exception as e:
         db.session.rollback() 
         error_msg = f"Error al enviar paquete DHCPRELEASE para {target_ip}: {e}. Interfaz: '{interface}'"
         log_event(error_msg, 'ERROR')
         db.session.commit()
-        return False
+        return False, False

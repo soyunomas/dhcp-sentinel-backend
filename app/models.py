@@ -1,10 +1,12 @@
+# app/models.py
+
 import datetime
 from app import db
 from sqlalchemy.sql import func
-from flask_login import UserMixin # <-- NUEVA IMPORTACIÓN
-from app import bcrypt # <-- NUEVA IMPORTACIÓN
+from flask_login import UserMixin 
+from app import bcrypt
 
-# --- NUEVO MODELO DE USUARIO ---
+# --- MODELO DE USUARIO ---
 class User(UserMixin, db.Model):
     __tablename__ = 'user'
     id = db.Column(db.Integer, primary_key=True)
@@ -28,9 +30,13 @@ class Device(db.Model):
     ip_address = db.Column(db.String(15), nullable=False)
     mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
     vendor = db.Column(db.String(255), nullable=True)
-    first_seen = db.Column(db.DateTime(timezone=True), server_default=func.now())
-    last_seen = db.Column(db.DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    status = db.Column(db.String(50), default='active', nullable=False) # ej: 'active', 'inactive', 'released'
+    
+    # --- LÍNEAS CORREGIDAS: Eliminados todos los server_default ---
+    first_seen = db.Column(db.DateTime(timezone=True), nullable=False)
+    last_seen = db.Column(db.DateTime(timezone=True), nullable=False)
+    # -----------------------------------------------------------
+
+    status = db.Column(db.String(50), default='active', nullable=False)
     is_excluded = db.Column(db.Boolean, default=False, nullable=False)
 
     def to_dict(self):
@@ -39,8 +45,8 @@ class Device(db.Model):
             'ip_address': self.ip_address,
             'mac_address': self.mac_address,
             'vendor': self.vendor,
-            'first_seen': self.first_seen.isoformat(),
-            'last_seen': self.last_seen.isoformat(),
+            'first_seen': self.first_seen.isoformat() if self.first_seen else None,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
             'status': self.status,
             'is_excluded': self.is_excluded
         }
@@ -53,6 +59,7 @@ class ApplicationConfig(db.Model):
     network_interface = db.Column(db.String(50), default='enp0s3')
     auto_release_threshold_hours = db.Column(db.Integer, default=24)
     mac_auto_release_list = db.Column(db.Text, default='')
+    dry_run_enabled = db.Column(db.Boolean, default=True, nullable=False)
 
     @staticmethod
     def get_settings():
@@ -70,7 +77,8 @@ class ApplicationConfig(db.Model):
             'dhcp_server_ip': self.dhcp_server_ip,
             'network_interface': self.network_interface,
             'auto_release_threshold_hours': self.auto_release_threshold_hours,
-            'mac_auto_release_list': self.mac_auto_release_list
+            'mac_auto_release_list': self.mac_auto_release_list,
+            'dry_run_enabled': self.dry_run_enabled
         }
 
 class LogEntry(db.Model):
