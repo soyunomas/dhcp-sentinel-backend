@@ -1,399 +1,444 @@
-// app/static/js/main.js
+// Variable global para almacenar el estado de la aplicación
+const appState = {
+    sortBy: 'last_seen',
+    order: 'desc',
+    searchTerm: '',
+    currentPage: 1,
+    perPage: 50,
+    autoRefreshInterval: null,
+    autoRefreshEnabled: true
+};
 
+// Instancia del modal de confirmación
+let confirmationModal = null;
+let confirmActionCallback = null;
+
+// --- INICIALIZACIÓN ---
 document.addEventListener('DOMContentLoaded', () => {
-    // --- ESTADO DE LA APLICACIÓN ---
-    let appState = {
-        sortBy: 'last_seen',
-        order: 'desc',
-        searchTerm: '',
-        currentPage: 1,
-        perPage: 50
-    };
-    let autoRefreshInterval = null;
-    const REFRESH_INTERVAL_MS = 10000;
-
-    // --- ELEMENTOS DEL DOM ---
-    const views = {
-        dashboard: document.getElementById('dashboard-view'),
-        config: document.getElementById('config-view'),
-        logs: document.getElementById('logs-view'),
-    };
-    const navLinks = {
-        dashboard: document.getElementById('nav-dashboard'),
-        config: document.getElementById('nav-config'),
-        logs: document.getElementById('nav-logs'),
-    };
-    const tableBody = document.getElementById('devices-table-body');
-    const searchInput = document.getElementById('search-input');
-    const spinnerOverlay = document.getElementById('spinner-overlay');
-    const autoRefreshSwitch = document.getElementById('auto-refresh-switch');
-    const confirmationModalEl = document.getElementById('confirmationModal');
-    const confirmationModal = new bootstrap.Modal(confirmationModalEl);
-    const perPageSelect = document.getElementById('per-page-select');
-    const paginationControls = document.getElementById('pagination-controls');
-
-    // --- CONFIGURACIÓN DE DAY.JS PARA ESPAÑOL ---
+    // Configuración inicial de Day.js
     dayjs.extend(dayjs_plugin_relativeTime);
     dayjs.extend(dayjs_plugin_localizedFormat);
-    dayjs.extend(dayjs_plugin_utc); // <-- 1. ACTIVAR EL PLUGIN UTC
+    dayjs.extend(dayjs_plugin_utc); // <-- Habilitar el plugin UTC
     dayjs.locale('es');
 
-    // --- FUNCIONES DE UTILIDAD ---
-    const showSpinner = () => spinnerOverlay.classList.remove('d-none');
-    const hideSpinner = () => spinnerOverlay.classList.add('d-none');
+    // Inicializar el modal de Bootstrap
+    confirmationModal = new bootstrap.Modal(document.getElementById('confirmationModal'));
+
+    // Navegación
+    document.getElementById('nav-dashboard').addEventListener('click', () => showView('dashboard'));
+    document.getElementById('nav-config').addEventListener('click', () => showView('config'));
+    document.getElementById('nav-logs').addEventListener('click', () => showView('logs'));
+
+    // Controles del Dashboard
+    document.getElementById('search-input').addEventListener('input', handleSearch);
+    document.getElementById('per-page-select').addEventListener('change', handlePerPageChange);
+    document.querySelectorAll('.sortable').forEach(header => header.addEventListener('click', handleSort));
+
+    // Formulario de Configuración
+    document.getElementById('config-form').addEventListener('submit', handleSaveConfig);
+    document.getElementById('clear-database-btn').addEventListener('click', handleClearDatabase);
+
+    // Toggle de auto-refresco
+    const autoRefreshSwitch = document.getElementById('auto-refresh-switch');
+    autoRefreshSwitch.addEventListener('change', (e) => {
+        appState.autoRefreshEnabled = e.target.checked;
+        toggleAutoRefresh();
+    });
+
+    // Carga inicial
+    loadInitialData();
+    toggleAutoRefresh();
+});
+
+// --- LÓGICA DE NAVEGACIÓN Y VISTAS ---
+function showView(viewId) {
+    // Ocultar todas las vistas
+    document.getElementById('dashboard-view').classList.add('d-none');
+    document.getElementById('config-view').classList.add('d-none');
+    document.getElementById('logs-view').classList.add('d-none');
+
+    // Quitar clase 'active' de todos los nav-links
+    document.querySelectorAll('.navbar-nav .nav-link').forEach(link => link.classList.remove('active'));
+
+    // Mostrar la vista seleccionada y marcar el link como activo
+    document.getElementById(`${viewId}-view`).classList.remove('d-none');
+    document.getElementById(`nav-${viewId}`).classList.add('active');
+
+    // Cargar datos específicos de la vista
+    switch (viewId) {
+        case 'dashboard':
+            fetchDevices();
+            fetchStats();
+            break;
+        case 'config':
+            fetchConfig();
+            break;
+        case 'logs':
+            fetchLogs();
+            break;
+    }
+}
+
+function loadInitialData() {
+    showView('dashboard');
+    fetchConfig(true); // Cargar configuración para mostrar el banner de Dry Run
+}
+
+// --- MANEJO DE ESTADO Y CONTROLES ---
+function handleSearch(event) {
+    appState.searchTerm = event.target.value;
+    appState.currentPage = 1; // Resetear a la primera página con cada nueva búsqueda
+    fetchDevices();
+}
+
+function handlePerPageChange(event) {
+    appState.perPage = event.target.value;
+    appState.currentPage = 1;
+    fetchDevices();
+}
+
+function handleSort(event) {
+    const newSortBy = event.currentTarget.dataset.sort;
+    if (appState.sortBy === newSortBy) {
+        appState.order = appState.order === 'asc' ? 'desc' : 'asc';
+    } else {
+        appState.sortBy = newSortBy;
+        appState.order = 'desc';
+    }
+    appState.currentPage = 1;
+    fetchDevices();
+}
+
+function handleSaveConfig(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const configData = Object.fromEntries(formData.entries());
     
-    const showNotification = (message, type = 'success') => {
-        const toastId = `toast-${Date.now()}`;
-        const toastHTML = `
-            <div id="${toastId}" class="toast align-items-center text-white bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true">
-                <div class="d-flex">
-                    <div class="toast-body">${message}</div>
-                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+    // Asegurarnos de que los valores numéricos y booleanos se envíen correctamente
+    configData.auto_release_threshold_hours = parseInt(configData.auto_release_threshold_hours, 10);
+    configData.dry_run_enabled = formData.has('dry_run_enabled');
+
+    updateConfig(configData);
+}
+
+function handleClearDatabase() {
+    showConfirmationModal(
+        'Limpiar Base de Datos',
+        '¿Estás seguro de que quieres eliminar <strong>todos los dispositivos y logs</strong>? Esta acción es irreversible.',
+        () => {
+            showSpinner();
+            fetch('/api/database/clear', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    showNotification('Éxito', 'La base de datos ha sido limpiada.', 'success');
+                    fetchDevices(); // Recargar datos para mostrar tablas vacías
+                    fetchStats();
+                    fetchLogs();
+                })
+                .catch(error => showNotification('Error', `No se pudo limpiar la base de datos: ${error.message}`, 'danger'))
+                .finally(hideSpinner);
+        }
+    );
+}
+
+
+function toggleAutoRefresh() {
+    if (appState.autoRefreshEnabled && !appState.autoRefreshInterval) {
+        appState.autoRefreshInterval = setInterval(() => {
+            const currentView = document.querySelector('.nav-link.active').id.split('-')[1];
+            if (currentView === 'dashboard') {
+                fetchDevices();
+                fetchStats();
+            } else if (currentView === 'logs') {
+                fetchLogs();
+            }
+        }, 10000); // 10 segundos
+    } else if (!appState.autoRefreshEnabled && appState.autoRefreshInterval) {
+        clearInterval(appState.autoRefreshInterval);
+        appState.autoRefreshInterval = null;
+    }
+}
+
+// --- FUNCIONES DE FETCH (LLAMADAS A LA API) ---
+function fetchDevices() {
+    const url = new URL('/api/devices', window.location.origin);
+    url.searchParams.append('page', appState.currentPage);
+    url.searchParams.append('per_page', appState.perPage);
+    url.searchParams.append('sort_by', appState.sortBy);
+    url.searchParams.append('order', appState.order);
+    if (appState.searchTerm) {
+        url.searchParams.append('search', appState.searchTerm);
+    }
+
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            renderDevices(data.items);
+            renderPagination(data.pagination);
+            updateSortIndicators();
+        })
+        .catch(error => console.error('Error al cargar dispositivos:', error));
+}
+
+function fetchStats() {
+    fetch('/api/stats')
+        .then(response => response.json())
+        .then(stats => {
+            document.getElementById('stats-total-devices').textContent = stats.total_devices || 0;
+            document.getElementById('stats-active-devices').textContent = stats.active_devices || 0;
+            document.getElementById('stats-released-ips').textContent = stats.released_ips || 0;
+        })
+        .catch(error => console.error('Error al cargar estadísticas:', error));
+}
+
+function fetchConfig(updateBanner = false) {
+    fetch('/api/config')
+        .then(response => response.json())
+        .then(config => {
+            document.getElementById('scan_subnet').value = config.scan_subnet || '';
+            document.getElementById('dhcp_server_ip').value = config.dhcp_server_ip || '';
+            document.getElementById('network_interface').value = config.network_interface || '';
+            document.getElementById('auto_release_threshold_hours').value = config.auto_release_threshold_hours || 0;
+            document.getElementById('mac_auto_release_list').value = config.mac_auto_release_list || '';
+            document.getElementById('dry_run_enabled').checked = config.dry_run_enabled;
+            if (updateBanner) {
+                renderDryRunBanner(config.dry_run_enabled);
+            }
+        })
+        .catch(error => console.error('Error al cargar la configuración:', error));
+}
+
+function updateConfig(configData) {
+    showSpinner();
+    fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) throw new Error(data.error);
+        showNotification('Éxito', 'La configuración ha sido guardada.', 'success');
+        renderDryRunBanner(data.config.dry_run_enabled);
+    })
+    .catch(error => showNotification('Error', `No se pudo guardar la configuración: ${error.message}`, 'danger'))
+    .finally(hideSpinner);
+}
+
+function fetchLogs() {
+    fetch('/api/logs?limit=200')
+        .then(response => response.json())
+        .then(logs => renderLogs(logs))
+        .catch(error => console.error('Error al cargar los logs:', error));
+}
+
+function performDeviceAction(url, method, body = null) {
+    showSpinner();
+    const options = {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+    };
+    if (body) options.body = JSON.stringify(body);
+
+    fetch(url, options)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+            showNotification('Éxito', data.message, 'success');
+            fetchDevices(); // Recargar la lista de dispositivos
+            fetchStats();   // Actualizar estadísticas
+        })
+        .catch(error => showNotification('Error', `La operación falló: ${error.message}`, 'danger'))
+        .finally(hideSpinner);
+}
+
+
+// --- FUNCIONES DE RENDERIZADO ---
+function renderDevices(devices) {
+    const tableBody = document.getElementById('devices-table-body');
+    if (!devices || devices.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>';
+        return;
+    }
+
+    tableBody.innerHTML = devices.map(device => {
+        const statusBadge = device.status === 'active' ? 'bg-success' : 'bg-secondary';
+        const excludedBadge = device.is_excluded ? '<span class="badge bg-warning">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
+        
+        // --- BLOQUE CORREGIDO CON dayjs.utc() ---
+        const lastSeenUTC = dayjs.utc(device.last_seen);
+        const lastSeen = device.last_seen 
+            ? `<span title="En tu hora local: ${lastSeenUTC.local().format('YYYY-MM-DD HH:mm:ss')}">${lastSeenUTC.fromNow()}</span>` 
+            : 'Nunca';
+        // --- FIN DEL BLOQUE CORREGIDO ---
+
+        const excludeButton = device.is_excluded
+            ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleExclusion(${device.id}, false)" title="Permitir que este dispositivo sea gestionado por las reglas automáticas.">Incluir</button>`
+            : `<button class="btn btn-sm btn-secondary" onclick="toggleExclusion(${device.id}, true)" title="Proteger este dispositivo de la liberación automática.">Excluir</button>`;
+
+        return `
+            <tr>
+                <td>${device.ip_address}</td>
+                <td>${device.mac_address}</td>
+                <td>${device.vendor || 'Desconocido'}</td>
+                <td>${lastSeen}</td>
+                <td><span class="badge ${statusBadge}">${device.status}</span></td>
+                <td>${excludedBadge}</td>
+                <td>
+                    <button class="btn btn-sm btn-primary" onclick="releaseIp(${device.id})">Liberar</button>
+                    ${excludeButton}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+
+function renderPagination(pagination) {
+    const controls = document.getElementById('pagination-controls');
+    if (!pagination || pagination.total_pages <= 1) {
+        controls.innerHTML = '';
+        return;
+    }
+
+    let html = `<nav aria-label="Navegación de dispositivos"><ul class="pagination pagination-sm mb-0">`;
+
+    // Botón de 'Anterior'
+    html += `<li class="page-item ${pagination.has_prev ? '' : 'disabled'}">
+        <a class="page-link" href="#" onclick="changePage(${pagination.page - 1})">Anterior</a>
+    </li>`;
+
+    // Páginas (lógica para mostrar un rango manejable)
+    const startPage = Math.max(1, pagination.page - 2);
+    const endPage = Math.min(pagination.total_pages, pagination.page + 2);
+    
+    if (startPage > 1) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+    
+    for (let i = startPage; i <= endPage; i++) {
+        html += `<li class="page-item ${i === pagination.page ? 'active' : ''}">
+            <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+        </li>`;
+    }
+
+    if (endPage < pagination.total_pages) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+
+    // Botón de 'Siguiente'
+    html += `<li class="page-item ${pagination.has_next ? '' : 'disabled'}">
+        <a class="page-link" href="#" onclick="changePage(${pagination.page + 1})">Siguiente</a>
+    </li>`;
+
+    html += `</ul></nav>`;
+    controls.innerHTML = html;
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll('.sortable span').forEach(span => span.textContent = '');
+    const activeHeader = document.querySelector(`.sortable[data-sort="${appState.sortBy}"] span`);
+    if (activeHeader) {
+        activeHeader.textContent = appState.order === 'asc' ? ' ▲' : ' ▼';
+    }
+}
+
+function renderLogs(logs) {
+    const list = document.getElementById('logs-list');
+    if (!logs || logs.length === 0) {
+        list.innerHTML = '<div class="list-group-item">No hay registros de actividad.</div>';
+        return;
+    }
+
+    const levelMap = {
+        'INFO': { class: 'list-group-item-secondary', icon: 'ℹ️' },
+        'WARNING': { class: 'list-group-item-warning', icon: '⚠️' },
+        'ERROR': { class: 'list-group-item-danger', icon: '❌' }
+    };
+
+    list.innerHTML = logs.map(log => {
+        const config = levelMap[log.level] || levelMap['INFO'];
+        const logTime = dayjs.utc(log.timestamp).local().format('YYYY-MM-DD HH:mm:ss');
+        return `
+            <div class="list-group-item d-flex justify-content-between align-items-start ${config.class}">
+                <div class="ms-2 me-auto">
+                    <div class="fw-bold">${config.icon} ${log.level}</div>
+                    ${log.message}
                 </div>
+                <span class="badge bg-dark rounded-pill">${logTime}</span>
             </div>
         `;
-        document.getElementById('notification-area').insertAdjacentHTML('beforeend', toastHTML);
-        const toastElement = document.getElementById(toastId);
-        const toast = new bootstrap.Toast(toastElement);
-        toast.show();
-        toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
-    };
+    }).join('');
+}
 
-    const showConfirmationModal = (message, onConfirm) => {
-        const modalBody = confirmationModalEl.querySelector('#confirmationModalBody');
-        const confirmButton = confirmationModalEl.querySelector('#confirmActionButton');
-        modalBody.textContent = message;
-        const newConfirmButton = confirmButton.cloneNode(true);
-        confirmButton.parentNode.replaceChild(newConfirmButton, confirmButton);
-        newConfirmButton.addEventListener('click', () => {
-            onConfirm();
-            confirmationModal.hide();
-        });
-        confirmationModal.show();
-    };
+function renderDryRunBanner(isEnabled) {
+    const banner = document.getElementById('dry-run-banner');
+    if (isEnabled) {
+        banner.innerHTML = `
+            <div class="alert alert-warning" role="alert">
+                <strong>Modo Simulación (Dry Run) está ACTIVO.</strong> Las acciones automáticas y manuales de liberación de IP serán registradas, pero no ejecutadas.
+            </div>
+        `;
+    } else {
+        banner.innerHTML = '';
+    }
+}
 
-    const formatRelativeTime = (isoTimestamp) => {
-        const now = dayjs.utc(); // <-- 2. USAR UTC PARA LA HORA ACTUAL
-        const then = dayjs(isoTimestamp); // dayjs interpreta la 'Z' o el offset como UTC por defecto
-        
-        const diffMinutes = now.diff(then, 'minute');
-        const diffHours = now.diff(then, 'hour');
 
-        if (diffMinutes < 1) return 'hace unos segundos';
-        if (diffMinutes < 60) return `hace ${diffMinutes} minuto${diffMinutes > 1 ? 's' : ''}`;
-        if (diffHours < 24) {
-            const minutes = diffMinutes % 60;
-            let result = `hace ${diffHours} hora${diffHours > 1 ? 's' : ''}`;
-            if (minutes > 0) result += ` y ${minutes} minuto${minutes > 1 ? 's' : ''}`;
-            return result;
-        }
-        return then.fromNow();
-    };
+// --- ACCIONES DE DISPOSITIVO (invocadas desde los botones) ---
+function changePage(newPage) {
+    appState.currentPage = newPage;
+    fetchDevices();
+}
 
-    // --- LÓGICA DE NAVEGACIÓN ---
-    const switchView = (targetView) => {
-        Object.values(views).forEach(view => view.classList.add('d-none'));
-        Object.values(navLinks).forEach(link => link.classList.remove('active'));
-        views[targetView].classList.remove('d-none');
-        navLinks[targetView].classList.add('active');
-    };
+function releaseIp(deviceId) {
+    performDeviceAction(`/api/devices/${deviceId}/release`, 'POST');
+}
 
-    Object.keys(navLinks).forEach(key => {
-        navLinks[key].addEventListener('click', (e) => {
-            e.preventDefault();
-            switchView(key);
-            if (key === 'dashboard') fetchAndRenderAll();
-            else if (key === 'config') fetchAndRenderConfig();
-            else if (key === 'logs') fetchLogs();
-        });
-    });
+function toggleExclusion(deviceId, isExcluded) {
+    performDeviceAction(`/api/devices/${deviceId}/exclude`, 'PUT', { is_excluded: isExcluded });
+}
 
-    // --- LÓGICA DE FETCH (API) ---
-    const fetchData = async (url) => {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-            }
-            return await response.json();
-        } catch (error) {
-            console.error('Fetch error:', error);
-            showNotification(`Error de red: ${error.message}`, 'danger');
-            throw error;
-        }
-    };
+
+// --- UTILIDADES (Spinner, Notificaciones, Modal) ---
+function showSpinner() {
+    document.getElementById('spinner-overlay').classList.remove('d-none');
+}
+
+function hideSpinner() {
+    document.getElementById('spinner-overlay').classList.add('d-none');
+}
+
+function showNotification(title, message, type = 'info') {
+    const notificationArea = document.getElementById('notification-area');
+    const toastId = `toast-${Date.now()}`;
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto text-${type}">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    notificationArea.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
+    toast.show();
+    toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
+}
+
+function showConfirmationModal(title, body, onConfirm) {
+    document.getElementById('confirmationModalLabel').textContent = title;
+    document.getElementById('confirmationModalBody').innerHTML = body;
     
-    // --- LÓGICA DE RENDERIZADO ---
-    const updateStats = async () => {
-        try {
-            const stats = await fetchData('/api/stats');
-            document.getElementById('stats-total-devices').textContent = stats.total_devices;
-            document.getElementById('stats-active-devices').textContent = stats.active_devices;
-            document.getElementById('stats-released-ips').textContent = stats.released_ips;
-        } catch (error) {
-            console.error('Error al cargar estadísticas:', error);
-        }
-    };
+    const confirmButton = document.getElementById('confirmActionButton');
     
-    const renderPaginationControls = (pagination) => {
-        paginationControls.innerHTML = '';
-        if (pagination.total_pages <= 1) return;
-
-        let html = '<nav><ul class="pagination mb-0">';
-        
-        html += `<li class="page-item ${pagination.has_prev ? '' : 'disabled'}"><a class="page-link" href="#" data-page="${pagination.page - 1}">Anterior</a></li>`;
-
-        for (let i = 1; i <= pagination.total_pages; i++) {
-            if (i === pagination.page) {
-                html += `<li class="page-item active"><span class="page-link">${i}</span></li>`;
-            } else {
-                html += `<li class="page-item"><a class="page-link" href="#" data-page="${i}">${i}</a></li>`;
-            }
-        }
-        
-        html += `<li class="page-item ${pagination.has_next ? '' : 'disabled'}"><a class="page-link" href="#" data-page="${pagination.page + 1}">Siguiente</a></li>`;
-        
-        html += '</ul></nav>';
-        paginationControls.innerHTML = html;
-    };
-
-    const renderDevicesTable = async () => {
-        try {
-            const url = `/api/devices?sort_by=${appState.sortBy}&order=${appState.order}&search=${appState.searchTerm}&page=${appState.currentPage}&per_page=${appState.perPage}`;
-            const data = await fetchData(url);
-            const devices = data.items;
-            tableBody.innerHTML = '';
-            
-            if (devices.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>';
-                paginationControls.innerHTML = '';
-                return;
-            }
-
-            devices.forEach(device => {
-                const lastSeen = formatRelativeTime(device.last_seen);
-                const statusBadge = device.status === 'active' ? 'bg-success' : 'bg-secondary';
-                const excludedBadge = device.is_excluded ? '<span class="badge bg-primary">Sí</span>' : '<span class="badge bg-secondary">No</span>';
-                const row = `<tr>
-                        <td>${device.ip_address}</td>
-                        <td>${device.mac_address}</td>
-                        <td>${device.vendor}</td>
-                        <td title="${dayjs(device.last_seen).format('llll')}">${lastSeen}</td>
-                        <td><span class="badge ${statusBadge}">${device.status}</span></td>
-                        <td>${excludedBadge}</td>
-                        <td>
-                            <button class="btn btn-warning btn-sm release-btn" data-device-id="${device.id}" title="Liberar IP">Liberar</button>
-                            <button class="btn btn-info btn-sm exclude-btn" data-device-id="${device.id}" data-is-excluded="${device.is_excluded}" title="Excluir de acciones automáticas">${device.is_excluded ? 'Incluir' : 'Excluir'}</button>
-                        </td>
-                    </tr>`;
-                tableBody.insertAdjacentHTML('beforeend', row);
-            });
-
-            renderPaginationControls(data.pagination);
-
-        } catch (error) {
-            tableBody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Error al cargar los dispositivos.</td></tr>';
-        }
-    };
-
-    const fetchAndRenderAll = (showSpinnerFlag = false) => {
-        if (showSpinnerFlag) showSpinner();
-        Promise.all([updateStats(), renderDevicesTable()])
-            .catch(error => console.error("Error al refrescar el dashboard", error))
-            .finally(() => {
-                if(showSpinnerFlag) hideSpinner();
-            });
-    };
-
-    const updateDryRunBanner = (isEnabled) => {
-        const banner = document.getElementById('dry-run-banner');
-        if (isEnabled) banner.innerHTML = `<div class="alert alert-warning" role="alert"><strong>Modo Simulación (Dry Run) está ACTIVO.</strong> Las acciones de liberación de IP no se ejecutarán realmente, solo se registrarán en los logs.</div>`;
-        else banner.innerHTML = `<div class="alert alert-danger" role="alert"><strong>Modo Simulación (Dry Run) está DESACTIVADO.</strong> Las acciones de liberación son reales.</div>`;
-    };
-
-    const fetchAndRenderConfig = async () => {
-        showSpinner();
-        try {
-            const config = await fetchData('/api/config');
-            document.getElementById('dry_run_enabled').checked = config.dry_run_enabled;
-            document.getElementById('scan_subnet').value = config.scan_subnet;
-            document.getElementById('dhcp_server_ip').value = config.dhcp_server_ip;
-            document.getElementById('network_interface').value = config.network_interface;
-            document.getElementById('auto_release_threshold_hours').value = config.auto_release_threshold_hours;
-            document.getElementById('mac_auto_release_list').value = config.mac_auto_release_list;
-            updateDryRunBanner(config.dry_run_enabled);
-        } catch (error) {
-            showNotification('Error al cargar la configuración.', 'danger');
-        } finally {
-            hideSpinner();
-        }
-    };
-
-    const fetchLogs = async () => {
-        showSpinner();
-        try {
-            const logs = await fetchData('/api/logs?limit=200');
-            const logsList = document.getElementById('logs-list');
-            logsList.innerHTML = '';
-            logs.forEach(log => {
-                let levelClass = 'list-group-item-secondary';
-                if (log.level === 'INFO') levelClass = 'list-group-item-light';
-                if (log.level === 'WARNING') levelClass = 'list-group-item-warning';
-                if (log.level === 'ERROR') levelClass = 'list-group-item-danger';
-
-                const logItem = `<div class="list-group-item ${levelClass}"><div class="d-flex w-100 justify-content-between"><small class="mb-1"><strong>${log.level}</strong></small><small>${dayjs(log.timestamp).format('YYYY-MM-DD HH:mm:ss')}</small></div><p class="mb-1 small">${log.message}</p></div>`;
-                logsList.insertAdjacentHTML('beforeend', logItem);
-            });
-        } catch (error) {
-            showNotification('Error al cargar los logs.', 'danger');
-        } finally {
-            hideSpinner();
-        }
-    };
-
-    // --- MANEJADORES DE ACCIONES ---
-    const releaseDeviceIp = async (deviceId) => {
-        showSpinner();
-        try {
-            const response = await fetch(`/api/devices/${deviceId}/release`, { method: 'POST' });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error);
-            showNotification(result.message, 'success');
-            fetchAndRenderAll();
-        } catch (error) {
-            showNotification(`Error al liberar IP: ${error.message}`, 'danger');
-        } finally {
-            hideSpinner();
-        }
-    };
-
-    const toggleDeviceExclusion = async (deviceId, newExcludeState) => {
-        showSpinner();
-        try {
-            const response = await fetch(`/api/devices/${deviceId}/exclude`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_excluded: newExcludeState }) });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error);
-            showNotification(result.message, 'success');
-            fetchAndRenderAll();
-        } catch (error) {
-            showNotification(`Error al cambiar exclusión: ${error.message}`, 'danger');
-        } finally {
-            hideSpinner();
-        }
-    };
-    
-    const clearDatabase = async () => {
-        showSpinner();
-        try {
-            const response = await fetch(`/api/database/clear`, { method: 'POST' });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error);
-            showNotification(result.message, 'warning');
-            appState.currentPage = 1;
-            fetchAndRenderAll();
-            fetchLogs();
-        } catch (error) {
-            showNotification(`Error al limpiar la base de datos: ${error.message}`, 'danger');
-        } finally {
-            hideSpinner();
-        }
-    };
-
-    // --- EVENT LISTENERS ---
-    searchInput.addEventListener('input', () => {
-        appState.searchTerm = searchInput.value.trim();
-        appState.currentPage = 1;
-        renderDevicesTable();
+    // Es importante remover el listener anterior para evitar que se acumulen
+    confirmButton.replaceWith(confirmButton.cloneNode(true));
+    document.getElementById('confirmActionButton').addEventListener('click', () => {
+        onConfirm();
+        confirmationModal.hide();
     });
 
-    document.querySelector('thead').addEventListener('click', (e) => {
-        const th = e.target.closest('.sortable');
-        if (th) {
-            const sortBy = th.dataset.sort;
-            if (appState.sortBy === sortBy) {
-                appState.order = appState.order === 'asc' ? 'desc' : 'asc';
-            } else {
-                appState.sortBy = sortBy;
-                appState.order = 'desc';
-            }
-            appState.currentPage = 1;
-            renderDevicesTable();
-        }
-    });
-
-    tableBody.addEventListener('click', (e) => {
-        const target = e.target;
-        const deviceId = target.dataset.deviceId;
-        if (target.classList.contains('release-btn')) {
-            showConfirmationModal(`¿Estás seguro de que quieres enviar una solicitud DHCPRELEASE para este dispositivo?`, () => releaseDeviceIp(deviceId));
-        } else if (target.classList.contains('exclude-btn')) {
-            const isExcluded = target.dataset.isExcluded === 'true';
-            const actionText = isExcluded ? 'incluir en' : 'excluir de';
-            showConfirmationModal(`¿Estás seguro de que quieres ${actionText} las acciones automáticas para este dispositivo?`, () => toggleDeviceExclusion(deviceId, !isExcluded));
-        }
-    });
-
-    document.getElementById('config-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        showSpinner();
-        const formData = new FormData(e.target);
-        const data = Object.fromEntries(formData.entries());
-        data.auto_release_threshold_hours = parseInt(data.auto_release_threshold_hours, 10);
-        data.dry_run_enabled = document.getElementById('dry_run_enabled').checked;
-
-        try {
-            const response = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error);
-            showNotification(result.message, 'success');
-            updateDryRunBanner(result.config.dry_run_enabled);
-        } catch (error) {
-            showNotification(`Error al guardar configuración: ${error.message}`, 'danger');
-        } finally {
-            hideSpinner();
-        }
-    });
-    
-    document.getElementById('clear-database-btn').addEventListener('click', () => {
-        showConfirmationModal('¡ADVERTENCIA! Esta acción eliminará permanentemente todos los dispositivos y logs. ¿Estás seguro?', clearDatabase);
-    });
-
-    autoRefreshSwitch.addEventListener('change', () => {
-        if (autoRefreshSwitch.checked) {
-            if (!autoRefreshInterval) autoRefreshInterval = setInterval(fetchAndRenderAll, REFRESH_INTERVAL_MS);
-        } else {
-            if (autoRefreshInterval) {
-                clearInterval(autoRefreshInterval);
-                autoRefreshInterval = null;
-            }
-        }
-    });
-
-    perPageSelect.addEventListener('change', () => {
-        appState.perPage = parseInt(perPageSelect.value, 10);
-        appState.currentPage = 1;
-        renderDevicesTable();
-    });
-
-    paginationControls.addEventListener('click', (e) => {
-        e.preventDefault();
-        const target = e.target;
-        if (target.tagName === 'A' && target.dataset.page) {
-            appState.currentPage = parseInt(target.dataset.page, 10);
-            renderDevicesTable();
-        }
-    });
-    
-    // --- INICIALIZACIÓN ---
-    const init = () => {
-        perPageSelect.value = appState.perPage;
-        fetchAndRenderConfig();
-        fetchAndRenderAll(true);
-        if (autoRefreshSwitch.checked) {
-            autoRefreshInterval = setInterval(fetchAndRenderAll, REFRESH_INTERVAL_MS);
-        }
-    };
-    
-    init();
-});
+    confirmationModal.show();
+}
