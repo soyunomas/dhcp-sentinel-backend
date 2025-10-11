@@ -22,6 +22,10 @@
                     <li class="nav-item">
                         <a class="nav-link active" href="#" id="nav-dashboard">Dashboard</a>
                     </li>
+                    <!-- NUEVO ENLACE A ESTADÍSTICAS -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" id="nav-stats">Estadísticas</a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="#" id="nav-config">Configuración</a>
                     </li>
@@ -128,6 +132,37 @@
             </div>
         </div>
 
+        <!-- NUEVA VISTA DE ESTADÍSTICAS -->
+        <div id="stats-view" class="d-none">
+            <h2 class="mb-3">Estadísticas Históricas</h2>
+            <div class="d-flex justify-content-center mb-4">
+                <div class="btn-group" role="group" aria-label="Selección de período de tiempo">
+                    <button type="button" class="btn btn-primary period-selector active" data-period="7d">Últimos 7 días</button>
+                    <button type="button" class="btn btn-outline-primary period-selector" data-period="30d">Últimos 30 días</button>
+                    <button type="button" class="btn btn-outline-primary period-selector" data-period="90d">Últimos 90 días</button>
+                </div>
+            </div>
+            
+            <div class="card mb-4">
+                <div class="card-header">
+                    Liberación de IPs a lo largo del tiempo
+                </div>
+                <div class="card-body">
+                    <canvas id="releases-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    Actividad y Crecimiento de la Red
+                </div>
+                <div class="card-body">
+                    <canvas id="activity-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+
         <!-- Vista de Configuración -->
         <div id="config-view" class="d-none">
             <h2 class="mb-3">Configuración</h2>
@@ -176,9 +211,9 @@
                     <div>
                         <h5 class="text-danger">Zona de Peligro</h5>
                         <p class="form-text">
-                            Esta acción eliminará permanentemente todo el historial de dispositivos descubiertos y todos los registros de logs. La configuración de la aplicación y el usuario administrador no se verán afectados.
+                            Esta acción eliminará permanentemente todo el historial de dispositivos descubiertos, los registros de logs y las estadísticas históricas. La configuración de la aplicación y el usuario administrador no se verán afectados.
                         </p>
-                        <button type="button" class="btn btn-danger w-100" id="clear-database-btn">Limpiar Base de Datos (Dispositivos y Logs)</button>
+                        <button type="button" class="btn btn-danger w-100" id="clear-database-btn">Limpiar Base de Datos (Dispositivos, Logs y Estadísticas)</button>
                     </div>
 
                 </div>
@@ -226,10 +261,11 @@
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/relativeTime.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/localizedFormat.js"></script>
-    <!-- === LÍNEA AÑADIDA: Carga el plugin UTC === -->
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/utc.js"></script>
-    <!-- ============================================= -->
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1/locale/es.js"></script>
+    
+    <!-- AÑADIMOS EL CDN DE CHART.JS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
