@@ -263,15 +263,29 @@ function renderDevices(devices) {
     }
 
     tableBody.innerHTML = devices.map(device => {
-        const statusBadge = device.status === 'active' ? 'bg-success' : 'bg-secondary';
-        const excludedBadge = device.is_excluded ? '<span class="badge bg-warning">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
+        // --- LÓGICA DE INSIGNIAS MEJORADA CON TOOLTIPS ---
+        let statusBadge;
+        switch (device.status) {
+            case 'active':
+                statusBadge = `<span class="badge bg-success" title="Dispositivo visto en los últimos 5 minutos">active</span>`;
+                break;
+            case 'inactive':
+                statusBadge = `<span class="badge bg-warning text-dark" title="No se ha visto en más de 5 minutos. Es candidato para liberación si supera el umbral de horas configurado.">inactive</span>`;
+                break;
+            case 'released':
+                statusBadge = `<span class="badge bg-secondary" title="La concesión de IP de este dispositivo ha sido liberada manual o automáticamente.">released</span>`;
+                break;
+            default:
+                statusBadge = `<span class="badge bg-info">${device.status}</span>`;
+        }
+        // --- FIN DE LA MEJORA ---
         
-        // --- BLOQUE CORREGIDO CON dayjs.utc() ---
+        const excludedBadge = device.is_excluded ? '<span class="badge bg-warning text-dark">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
+        
         const lastSeenUTC = dayjs.utc(device.last_seen);
         const lastSeen = device.last_seen 
             ? `<span title="En tu hora local: ${lastSeenUTC.local().format('YYYY-MM-DD HH:mm:ss')}">${lastSeenUTC.fromNow()}</span>` 
             : 'Nunca';
-        // --- FIN DEL BLOQUE CORREGIDO ---
 
         const excludeButton = device.is_excluded
             ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleExclusion(${device.id}, false)" title="Permitir que este dispositivo sea gestionado por las reglas automáticas.">Incluir</button>`
@@ -283,7 +297,7 @@ function renderDevices(devices) {
                 <td>${device.mac_address}</td>
                 <td>${device.vendor || 'Desconocido'}</td>
                 <td>${lastSeen}</td>
-                <td><span class="badge ${statusBadge}">${device.status}</span></td>
+                <td>${statusBadge}</td>
                 <td>${excludedBadge}</td>
                 <td>
                     <button class="btn btn-sm btn-primary" onclick="releaseIp(${device.id})">Liberar</button>
