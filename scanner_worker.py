@@ -47,20 +47,25 @@ def commit_daily_stats():
             stat_entry = HistoricalStat(date=date_to_commit)
             db.session.add(stat_entry)
         
-        # Actualizar los campos con los valores acumulados
-        stat_entry.releases_inactivity += daily_stats.get("releases_inactivity", 0)
-        stat_entry.releases_mac_list += daily_stats.get("releases_mac_list", 0)
+        # --- BLOQUE CORREGIDO: Manejo robusto de valores None ---
+        # Si el valor de la BD es None, lo tratamos como 0 antes de sumar.
+        stat_entry.releases_inactivity = (stat_entry.releases_inactivity or 0) + daily_stats.get("releases_inactivity", 0)
+        stat_entry.releases_mac_list = (stat_entry.releases_mac_list or 0) + daily_stats.get("releases_mac_list", 0)
+        
+        # Esta línea ya era robusta, pero la mantenemos consistente
         stat_entry.active_devices_peak = max(
             stat_entry.active_devices_peak or 0,
             daily_stats.get("active_devices_peak", 0)
         )
+        # --- FIN DE LA CORRECCIÓN ---
+
         stat_entry.total_devices_snapshot = Device.query.count()
 
         db.session.commit()
         print(f"[OK] Estadísticas para {date_to_commit.isoformat()} guardadas.")
 
     except Exception as e:
-        print(f"[!!!] ERROR al guardar estadísticas diarias: {e}")
+        print(f"[!!!] ERROR al guardar estadísticas diarias para {date_to_commit.isoformat()}: {e}")
         db.session.rollback()
         log_event(f"Error al guardar estadísticas diarias para {date_to_commit.isoformat()}: {e}", "ERROR")
         db.session.commit()
