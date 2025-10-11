@@ -7,7 +7,7 @@ from app import db
 from app.models import Device, ApplicationConfig, LogEntry, HistoricalStat
 from app.scanner.core import perform_dhcp_release, log_event
 from sqlalchemy import or_
-from sqlalchemy.exc import OperationalError # <-- NUEVA IMPORTACIÓN
+from sqlalchemy.exc import OperationalError 
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -37,7 +37,6 @@ def get_stats():
     except Exception as e:
         return jsonify({'error': f'No se pudieron calcular las estadísticas: {str(e)}'}), 500
 
-# --- ENDPOINT MODIFICADO PARA SER MÁS ROBUSTO ---
 @bp.route('/stats/historical', methods=['GET'])
 def get_historical_stats():
     """
@@ -55,22 +54,17 @@ def get_historical_stats():
     try:
         stats = HistoricalStat.query.filter(HistoricalStat.date >= start_date).order_by(HistoricalStat.date.asc()).all()
     except OperationalError:
-        # Esto ocurre si la tabla no existe. Probablemente la migración no se ha ejecutado.
         error_msg = "La tabla de estadísticas no existe. Por favor, ejecuta 'flask db upgrade' para actualizar el esquema de la base de datos."
         log_event(error_msg, "ERROR")
         db.session.commit()
         return jsonify({'error': error_msg}), 500
     except Exception as e:
-        # Captura otros posibles errores de base de datos
         log_event(f"Error al consultar estadísticas históricas: {str(e)}", "ERROR")
         db.session.commit()
         return jsonify({'error': f'Ocurrió un error en la base de datos: {str(e)}'}), 500
 
-
-    # Formatear los datos para Chart.js
     labels = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days)]
     
-    # Inicializar diccionarios de datos con ceros para todas las fechas del rango
     data_map = {label: {
         'releases_inactivity': 0,
         'releases_mac_list': 0,
@@ -79,7 +73,6 @@ def get_historical_stats():
         'total_devices_snapshot': 0
     } for label in labels}
 
-    # Rellenar con los datos reales de la base de datos
     for stat in stats:
         date_str = stat.date.isoformat()
         if date_str in data_map:
@@ -151,13 +144,11 @@ def get_devices():
 
 @bp.route('/config', methods=['GET'])
 def get_config():
-    """Endpoint para obtener la configuración actual de la aplicación."""
     settings = ApplicationConfig.get_settings()
     return jsonify(settings.to_dict())
 
 @bp.route('/config', methods=['PUT'])
 def update_config():
-    """Endpoint para actualizar la configuración de la aplicación."""
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No input data provided'}), 400
@@ -174,10 +165,6 @@ def update_config():
 
 @bp.route('/database/clear', methods=['POST'])
 def clear_database():
-    """
-    Endpoint para eliminar todos los registros de Dispositivos, Logs y Estadísticas.
-    No toca la configuración ni los usuarios.
-    """
     try:
         num_devices_deleted = db.session.query(Device).delete()
         num_logs_deleted = db.session.query(LogEntry).delete()
@@ -197,7 +184,6 @@ def clear_database():
 
 @bp.route('/devices/<int:device_id>/release', methods=['POST'])
 def release_device_ip(device_id):
-    """Endpoint para liberar manualmente la concesión DHCP de un dispositivo."""
     device = db.session.get(Device, device_id)
     if not device: return jsonify({'error': 'Dispositivo no encontrado'}), 404
     
@@ -216,14 +202,23 @@ def release_device_ip(device_id):
             device.status = 'released'
             log_event(f"Liberada manualmente la IP {device.ip_address} (MAC: {device.mac_address})", 'INFO')
             
-            # --- LÓGICA AÑADIDA PARA ESTADÍSTICAS ---
+            # --- BLOQUE CORREGIDO: Creación robusta de la entrada de estadísticas ---
             today = date_obj.today()
             stat_entry = db.session.get(HistoricalStat, today)
             if not stat_entry:
-                stat_entry = HistoricalStat(date=today)
+                # Si la entrada no existe, la creamos con todos los valores inicializados a 0
+                stat_entry = HistoricalStat(
+                    date=today,
+                    releases_manual=0,
+                    releases_inactivity=0,
+                    releases_mac_list=0,
+                    active_devices_peak=0,
+                    total_devices_snapshot=0
+                )
                 db.session.add(stat_entry)
-            stat_entry.releases_manual += 1
-            # --- FIN LÓGICA AÑADIDA ---
+            
+            stat_entry.releases_manual = (stat_entry.releases_manual or 0) + 1
+            # --- FIN DE LA CORRECCIÓN ---
             
             db.session.commit()
             message = f'Solicitud de liberación para {device.ip_address} enviada correctamente.'
@@ -238,7 +233,6 @@ def release_device_ip(device_id):
 
 @bp.route('/devices/<int:device_id>/exclude', methods=['PUT'])
 def toggle_device_exclusion(device_id):
-    """Endpoint para marcar/desmarcar un dispositivo como excluido."""
     device = db.session.get(Device, device_id)
     if not device: return jsonify({'error': 'Dispositivo no encontrado'}), 404
     data = request.get_json()
@@ -253,7 +247,6 @@ def toggle_device_exclusion(device_id):
 
 @bp.route('/logs', methods=['GET'])
 def get_logs():
-    """Endpoint para obtener las entradas del registro de eventos."""
     limit = request.args.get('limit', 100, type=int)
     logs = LogEntry.query.order_by(LogEntry.timestamp.desc()).limit(limit).all()
     logs_list = [log.to_dict() for log in logs]
