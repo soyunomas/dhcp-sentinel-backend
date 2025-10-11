@@ -10,7 +10,42 @@ from app.scanner.core import discover_hosts, sync_devices_db, log_event, perform
 
 # --- CONFIGURACIÓN DEL WORKER ---
 SCAN_INTERVAL_SECONDS = 60 
+INACTIVE_THRESHOLD_MINUTES = 5 # Umbral para considerar un dispositivo inactivo
 # --------------------------------
+
+def update_inactive_devices_status():
+    """
+    *** Propósito: Actualización de Estado Visual ***
+    Esta función actualiza el estado de los dispositivos a 'inactive' si no han sido 
+    vistos recientemente. Su única finalidad es proporcionar una representación visual 
+    precisa en el frontend (insignia verde vs. amarilla).
+    ESTA FUNCIÓN NO DESENCADENA NINGUNA ACCIÓN DE LIBERACIÓN DE IP.
+    """
+    print("[*] Actualizando estado de dispositivos inactivos...")
+    
+    try:
+        threshold = datetime.now(UTC) - timedelta(minutes=INACTIVE_THRESHOLD_MINUTES)
+        
+        devices_to_update = Device.query.filter(
+            Device.status == 'active',
+            Device.last_seen < threshold
+        ).all()
+
+        if devices_to_update:
+            for device in devices_to_update:
+                device.status = 'inactive'
+            
+            db.session.commit()
+            print(f"[OK] Se marcaron {len(devices_to_update)} dispositivo(s) como inactivos.")
+        else:
+            print("[*] No se encontraron dispositivos para marcar como inactivos.")
+
+    except Exception as e:
+        print(f"[!!!] ERROR al actualizar estados a inactivo: {e}")
+        db.session.rollback()
+        log_event(f"Error al actualizar el estado de los dispositivos inactivos: {e}", "ERROR")
+        db.session.commit()
+
 
 def run_scan_cycle(app_config):
     """
@@ -29,8 +64,10 @@ def run_scan_cycle(app_config):
 
 def run_auto_release_cycle(app_config):
     """
-    Busca dispositivos para liberar automáticamente, ya sea por inactividad o por
-    coincidir con la lista de MACs, y libera (o simula liberar) sus IPs si cumplen las condiciones.
+    *** Propósito: Lógica de Automatización de Liberación de IPs ***
+    Busca dispositivos para liberar automáticamente basado en reglas de negocio de largo plazo.
+    La lógica aquí es independiente del estado 'inactive' y se basa únicamente en el umbral 
+    de horas configurado por el usuario o en la lista de MACs.
     """
     print("--- [!] Iniciando ciclo de liberación automática programado ---")
     
@@ -39,17 +76,17 @@ def run_auto_release_cycle(app_config):
     
     candidates_to_release = set()
 
-    # --- Criterio 1: Liberación por inactividad ---
+    # --- Criterio 1: Liberación por inactividad a largo plazo ---
     threshold_hours = app_config.auto_release_threshold_hours
     if threshold_hours > 0:
         time_threshold = datetime.now(UTC) - timedelta(hours=threshold_hours)
         inactive_devices = Device.query.filter(
             Device.is_excluded == False,
             Device.status != 'released',
-            Device.last_seen < time_threshold
+            Device.last_seen < time_threshold # <-- La condición clave es el timestamp, no el estado
         ).all()
         if inactive_devices:
-            print(f"[*] Encontrados {len(inactive_devices)} dispositivo(s) por inactividad.")
+            print(f"[*] Encontrados {len(inactive_devices)} dispositivo(s) por inactividad prolongada.")
             candidates_to_release.update(inactive_devices)
     else:
         print("[*] La liberación por inactividad está desactivada.")
@@ -87,7 +124,6 @@ def run_auto_release_cycle(app_config):
         log_event(log_msg, 'INFO')
         db.session.commit()
         
-        # --- LÓGICA ACTUALIZADA ---
         success, was_dry_run = perform_dhcp_release(
             target_ip=device.ip_address,
             target_mac=device.mac_address,
@@ -97,7 +133,6 @@ def run_auto_release_cycle(app_config):
         )
         
         if success:
-            # Solo actualizamos el estado si NO fue un dry run
             if not was_dry_run:
                 device.status = 'released'
                 db.session.commit()
@@ -123,21 +158,20 @@ if __name__ == '__main__':
             try:
                 current_time = datetime.now(UTC)
                 config = ApplicationConfig.get_settings()
+
+                update_inactive_devices_status()
                 
                 run_scan_cycle(config)
 
                 release_interval_hours = config.auto_release_threshold_hours
                 mac_list_is_configured = config.mac_auto_release_list.strip() != ""
                 
-                # Ejecutaremos el ciclo de liberación si alguna de las dos automatizaciones está activa
                 if release_interval_hours > 0 or mac_list_is_configured:
-                    # La lógica de temporización para inactividad sigue igual
                     time_since_last_check = current_time - last_release_check_time
                     run_now = False
                     if release_interval_hours > 0 and time_since_last_check >= timedelta(hours=release_interval_hours):
                         run_now = True
                     
-                    # La lista de MACs debe ejecutarse cada SCAN_INTERVAL_SECONDS
                     if mac_list_is_configured:
                         run_now = True
 
