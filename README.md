@@ -189,3 +189,26 @@ Este proceso se encargará del descubrimiento de dispositivos y las liberaciones
 4.  **Crucialmente, actualiza los parámetros de red** (Subred a Escanear, IP del Servidor DHCP y especialmente la **Interfaz de Red**) para que coincidan con la configuración de tu red.
 5.  Revisa las reglas de automatización y el modo de simulación (Dry Run) según tus necesidades.
 6.  Guarda los cambios. La aplicación ya está completamente operativa.
+
+---
+
+> [!WARNING]
+> ## Aviso Legal y de Responsabilidad
+>
+> Este software se proporciona "tal cual", sin garantía de ningún tipo. **El uso de DHCP Sentinel es bajo su entera responsabilidad.**
+>
+> Esta aplicación interactúa directamente con su red y puede causar interrupciones en el servicio si se configura incorrectamente. Se recomienda encarecidamente:
+>
+> 1.  **Probar primero en un entorno no crítico.**
+> 2.  Utilizar el **"Modo Simulación (Dry Run)"** para observar el comportamiento sin realizar cambios reales.
+> 3.  **Excluir siempre los dispositivos críticos** (servidores, routers, switches, etc.).
+>
+> Los autores no se hacen responsables de ningún daño que pueda surgir del uso de este software.
+
+---
+
+## TO-DO (Próximas Mejoras)
+
+*   [ ] **Añadir el período de escaneo a la configuración:** Permitir al usuario modificar el `SCAN_INTERVAL_SECONDS` (actualmente fijo en 60 segundos) desde la interfaz web para ofrecer más flexibilidad.
+*   [ ] Añadir soporte para múltiples subredes de escaneo.
+*   [ ] Implementar notificaciones (ej. por email o Telegram) para eventos críticos.
