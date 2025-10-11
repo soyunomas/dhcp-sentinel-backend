@@ -15,6 +15,19 @@ DHCP Sentinel es un auditor de red que trabaja junto a tu servidor DHCP existent
 -   **Registro de Eventos**: Todas las acciones importantes (escaneos, liberaciones manuales y automáticas, errores) se registran y se pueden visualizar dentro de la aplicación.
 -   **Modo Simulación (Dry Run)**: Permite ejecutar la aplicación en un modo seguro que registra las acciones que *tomaría* sin ejecutarlas realmente, perfecto para pruebas y configuración inicial.
 
+## Vistas de la Aplicación
+
+<table>
+  <tr>
+    <td align="center"><img src="img/scr1.png" alt="Dashboard Principal" width="49%"></td>
+    <td align="center"><img src="img/scr2.png" alt="Panel de Configuración" width="49%"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Dashboard Principal</em></td>
+    <td align="center"><em>Panel de Configuración</em></td>
+  </tr>
+</table>
+
 ## Lógica de Funcionamiento
 
 El sistema opera con dos componentes principales: la **Interfaz Web** (manejada por Flask) y un **Worker en Segundo Plano** (`scanner_worker.py`).
