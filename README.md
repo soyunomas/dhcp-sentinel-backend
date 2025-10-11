@@ -166,7 +166,7 @@ La aplicación requiere que dos procesos se ejecuten en dos terminales diferente
 source venv/bin/activate
 
 # Inicia el servidor web de Flask
-sudo venv/bin/python run.py
+venv/bin/python run.py
 ```
 Esto hará que la interfaz web esté disponible en `http://<ip-de-tu-servidor>:5001`.
 
