@@ -100,3 +100,28 @@ class LogEntry(db.Model):
             'level': self.level,
             'message': self.message
         }
+
+# --- NUEVO MODELO PARA ESTADÍSTICAS HISTÓRICAS ---
+class HistoricalStat(db.Model):
+    __tablename__ = 'historical_stat'
+    # La fecha es la clave primaria para asegurar una entrada por día.
+    date = db.Column(db.Date, primary_key=True)
+    
+    # Contadores de liberaciones
+    releases_manual = db.Column(db.Integer, default=0, nullable=False)
+    releases_inactivity = db.Column(db.Integer, default=0, nullable=False)
+    releases_mac_list = db.Column(db.Integer, default=0, nullable=False)
+
+    # Snapshots de estado de la red
+    total_devices_snapshot = db.Column(db.Integer, default=0, nullable=False)
+    active_devices_peak = db.Column(db.Integer, default=0, nullable=False)
+
+    def to_dict(self):
+        return {
+            'date': self.date.isoformat(),
+            'releases_manual': self.releases_manual,
+            'releases_inactivity': self.releases_inactivity,
+            'releases_mac_list': self.releases_mac_list,
+            'total_devices_snapshot': self.total_devices_snapshot,
+            'active_devices_peak': self.active_devices_peak
+        }

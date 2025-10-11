@@ -2,11 +2,12 @@
 
 from flask import Blueprint, jsonify, request
 from flask_login import login_required, current_user
-from datetime import datetime, timedelta, UTC # <-- NUEVA IMPORTACIÓN
+from datetime import datetime, timedelta, UTC, date as date_obj
 from app import db
-from app.models import Device, ApplicationConfig, LogEntry
+from app.models import Device, ApplicationConfig, LogEntry, HistoricalStat
 from app.scanner.core import perform_dhcp_release, log_event
 from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError # <-- NUEVA IMPORTACIÓN
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -22,12 +23,8 @@ def get_stats():
     try:
         total_devices = Device.query.count()
         
-        # --- LÍNEA CORREGIDA ---
-        # Define "activo" como cualquier dispositivo visto en los últimos 5 minutos.
-        # Esto funciona en todas las bases de datos.
         active_threshold = datetime.now(UTC) - timedelta(minutes=5)
         active_devices = Device.query.filter(Device.last_seen > active_threshold).count()
-        # --- FIN DE LA CORRECCIÓN ---
 
         released_ips = Device.query.filter_by(status='released').count()
         
@@ -40,25 +37,92 @@ def get_stats():
     except Exception as e:
         return jsonify({'error': f'No se pudieron calcular las estadísticas: {str(e)}'}), 500
 
+# --- ENDPOINT MODIFICADO PARA SER MÁS ROBUSTO ---
+@bp.route('/stats/historical', methods=['GET'])
+def get_historical_stats():
+    """
+    Devuelve datos históricos agregados para los gráficos del frontend.
+    """
+    period_str = request.args.get('period', '7d')
+    days = 7
+    if period_str == '30d':
+        days = 30
+    elif period_str == '90d':
+        days = 90
+
+    start_date = date_obj.today() - timedelta(days=days - 1)
+    
+    try:
+        stats = HistoricalStat.query.filter(HistoricalStat.date >= start_date).order_by(HistoricalStat.date.asc()).all()
+    except OperationalError:
+        # Esto ocurre si la tabla no existe. Probablemente la migración no se ha ejecutado.
+        error_msg = "La tabla de estadísticas no existe. Por favor, ejecuta 'flask db upgrade' para actualizar el esquema de la base de datos."
+        log_event(error_msg, "ERROR")
+        db.session.commit()
+        return jsonify({'error': error_msg}), 500
+    except Exception as e:
+        # Captura otros posibles errores de base de datos
+        log_event(f"Error al consultar estadísticas históricas: {str(e)}", "ERROR")
+        db.session.commit()
+        return jsonify({'error': f'Ocurrió un error en la base de datos: {str(e)}'}), 500
+
+
+    # Formatear los datos para Chart.js
+    labels = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days)]
+    
+    # Inicializar diccionarios de datos con ceros para todas las fechas del rango
+    data_map = {label: {
+        'releases_inactivity': 0,
+        'releases_mac_list': 0,
+        'releases_manual': 0,
+        'active_devices_peak': 0,
+        'total_devices_snapshot': 0
+    } for label in labels}
+
+    # Rellenar con los datos reales de la base de datos
+    for stat in stats:
+        date_str = stat.date.isoformat()
+        if date_str in data_map:
+            data_map[date_str] = {
+                'releases_inactivity': stat.releases_inactivity,
+                'releases_mac_list': stat.releases_mac_list,
+                'releases_manual': stat.releases_manual,
+                'active_devices_peak': stat.active_devices_peak,
+                'total_devices_snapshot': stat.total_devices_snapshot
+            }
+
+    response_data = {
+        'labels': labels,
+        'datasets': {
+            'releases': [
+                {'label': 'Liberadas por Inactividad', 'data': [data_map[d]['releases_inactivity'] for d in labels]},
+                {'label': 'Liberadas por Lista MAC', 'data': [data_map[d]['releases_mac_list'] for d in labels]},
+                {'label': 'Liberadas Manualmente', 'data': [data_map[d]['releases_manual'] for d in labels]}
+            ],
+            'activity': [
+                {'label': 'Pico de Dispositivos Activos', 'data': [data_map[d]['active_devices_peak'] for d in labels]},
+                {'label': 'Total Dispositivos Conocidos', 'data': [data_map[d]['total_devices_snapshot'] for d in labels]}
+            ]
+        }
+    }
+    
+    return jsonify(response_data)
+
 @bp.route('/devices', methods=['GET'])
 def get_devices():
     """Endpoint para obtener la lista de dispositivos, con soporte para búsqueda, ordenación y paginación."""
-    # Parámetros de la solicitud
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     sort_by = request.args.get('sort_by', 'last_seen')
     order = request.args.get('order', 'desc')
     search_term = request.args.get('search', '')
 
-    # Construcción de la consulta base
     query = Device.query
 
-    # Filtro de búsqueda
     if search_term:
         search_pattern = f"%{search_term}%"
         query = query.filter(or_(Device.ip_address.ilike(search_pattern), Device.mac_address.ilike(search_pattern), Device.vendor.ilike(search_pattern)))
 
-    # Lógica de ordenación
     allowed_sort_fields = ['ip_address', 'mac_address', 'vendor', 'first_seen', 'last_seen', 'status', 'is_excluded']
     if sort_by not in allowed_sort_fields:
         sort_by = 'last_seen'
@@ -68,11 +132,9 @@ def get_devices():
     else:
         query = query.order_by(sort_column.desc())
 
-    # Paginación
     paginated_devices = query.paginate(page=page, per_page=per_page, error_out=False)
     devices = paginated_devices.items
 
-    # Formateo de la respuesta
     response = {
         'items': [device.to_dict() for device in devices],
         'pagination': {
@@ -113,18 +175,19 @@ def update_config():
 @bp.route('/database/clear', methods=['POST'])
 def clear_database():
     """
-    Endpoint para eliminar todos los registros de Dispositivos y Logs.
+    Endpoint para eliminar todos los registros de Dispositivos, Logs y Estadísticas.
     No toca la configuración ni los usuarios.
     """
     try:
         num_devices_deleted = db.session.query(Device).delete()
         num_logs_deleted = db.session.query(LogEntry).delete()
+        num_stats_deleted = db.session.query(HistoricalStat).delete()
         
-        log_event(f"El usuario '{current_user.username}' ha limpiado la base de datos. Se eliminaron {num_devices_deleted} dispositivos y {num_logs_deleted} logs.", "WARNING")
+        log_event(f"El usuario '{current_user.username}' ha limpiado la base de datos. Se eliminaron {num_devices_deleted} dispositivos, {num_logs_deleted} logs y {num_stats_deleted} registros de estadísticas.", "WARNING")
         
         db.session.commit()
         
-        return jsonify({'message': 'La base de datos de dispositivos y logs ha sido limpiada correctamente.'})
+        return jsonify({'message': 'La base de datos de dispositivos, logs y estadísticas ha sido limpiada correctamente.'})
     except Exception as e:
         db.session.rollback()
         log_event(f"Error al intentar limpiar la base de datos: {str(e)}", "ERROR")
@@ -151,8 +214,18 @@ def release_device_ip(device_id):
     if success:
         if not was_dry_run:
             device.status = 'released'
-            db.session.commit()
             log_event(f"Liberada manualmente la IP {device.ip_address} (MAC: {device.mac_address})", 'INFO')
+            
+            # --- LÓGICA AÑADIDA PARA ESTADÍSTICAS ---
+            today = date_obj.today()
+            stat_entry = db.session.get(HistoricalStat, today)
+            if not stat_entry:
+                stat_entry = HistoricalStat(date=today)
+                db.session.add(stat_entry)
+            stat_entry.releases_manual += 1
+            # --- FIN LÓGICA AÑADIDA ---
+            
+            db.session.commit()
             message = f'Solicitud de liberación para {device.ip_address} enviada correctamente.'
         else:
             message = f'Simulación de liberación para {device.ip_address} completada.'
@@ -160,6 +233,7 @@ def release_device_ip(device_id):
         return jsonify({'message': message, 'device': device.to_dict()})
     else:
         log_event(f"Falló el intento de liberación manual para la IP {device.ip_address}", 'ERROR')
+        db.session.commit()
         return jsonify({'error': 'Falló el envío del paquete DHCPRELEASE.'}), 500
 
 @bp.route('/devices/<int:device_id>/exclude', methods=['PUT'])
