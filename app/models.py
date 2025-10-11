@@ -31,22 +31,27 @@ class Device(db.Model):
     mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
     vendor = db.Column(db.String(255), nullable=True)
     
-    # --- LÍNEAS CORREGIDAS: Eliminados todos los server_default ---
     first_seen = db.Column(db.DateTime(timezone=True), nullable=False)
     last_seen = db.Column(db.DateTime(timezone=True), nullable=False)
-    # -----------------------------------------------------------
 
     status = db.Column(db.String(50), default='active', nullable=False)
     is_excluded = db.Column(db.Boolean, default=False, nullable=False)
 
     def to_dict(self):
+        # Función para formatear fechas de manera segura, asegurando el formato UTC con 'Z'
+        def format_datetime_as_utc(dt):
+            if not dt:
+                return None
+            # Asegura que la cadena ISO siempre termine con 'Z' (Zulu time / UTC)
+            return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
         return {
             'id': self.id,
             'ip_address': self.ip_address,
             'mac_address': self.mac_address,
             'vendor': self.vendor,
-            'first_seen': self.first_seen.isoformat() if self.first_seen else None,
-            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'first_seen': format_datetime_as_utc(self.first_seen),
+            'last_seen': format_datetime_as_utc(self.last_seen),
             'status': self.status,
             'is_excluded': self.is_excluded
         }
