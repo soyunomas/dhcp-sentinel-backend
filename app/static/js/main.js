@@ -1,458 +1,632 @@
-// Variable global para almacenar el estado de la aplicación
-const appState = {
-    sortBy: 'last_seen',
-    order: 'desc',
-    searchTerm: '',
-    currentPage: 1,
-    perPage: 50,
-    autoRefreshInterval: null,
-    autoRefreshEnabled: true
-};
-
-// Instancia del modal de confirmación
-let confirmationModal = null;
-let confirmActionCallback = null;
-
-// --- INICIALIZACIÓN ---
 document.addEventListener('DOMContentLoaded', () => {
-    // Configuración inicial de Day.js
-    dayjs.extend(dayjs_plugin_relativeTime);
-    dayjs.extend(dayjs_plugin_localizedFormat);
-    dayjs.extend(dayjs_plugin_utc); // <-- Habilitar el plugin UTC
-    dayjs.locale('es');
-
-    // Inicializar el modal de Bootstrap
-    confirmationModal = new bootstrap.Modal(document.getElementById('confirmationModal'));
-
-    // Navegación
-    document.getElementById('nav-dashboard').addEventListener('click', () => showView('dashboard'));
-    document.getElementById('nav-config').addEventListener('click', () => showView('config'));
-    document.getElementById('nav-logs').addEventListener('click', () => showView('logs'));
-
-    // Controles del Dashboard
-    document.getElementById('search-input').addEventListener('input', handleSearch);
-    document.getElementById('per-page-select').addEventListener('change', handlePerPageChange);
-    document.querySelectorAll('.sortable').forEach(header => header.addEventListener('click', handleSort));
-
-    // Formulario de Configuración
-    document.getElementById('config-form').addEventListener('submit', handleSaveConfig);
-    document.getElementById('clear-database-btn').addEventListener('click', handleClearDatabase);
-
-    // Toggle de auto-refresco
-    const autoRefreshSwitch = document.getElementById('auto-refresh-switch');
-    autoRefreshSwitch.addEventListener('change', (e) => {
-        appState.autoRefreshEnabled = e.target.checked;
-        toggleAutoRefresh();
-    });
-
-    // Carga inicial
-    loadInitialData();
-    toggleAutoRefresh();
-});
-
-// --- LÓGICA DE NAVEGACIÓN Y VISTAS ---
-function showView(viewId) {
-    // Ocultar todas las vistas
-    document.getElementById('dashboard-view').classList.add('d-none');
-    document.getElementById('config-view').classList.add('d-none');
-    document.getElementById('logs-view').classList.add('d-none');
-
-    // Quitar clase 'active' de todos los nav-links
-    document.querySelectorAll('.navbar-nav .nav-link').forEach(link => link.classList.remove('active'));
-
-    // Mostrar la vista seleccionada y marcar el link como activo
-    document.getElementById(`${viewId}-view`).classList.remove('d-none');
-    document.getElementById(`nav-${viewId}`).classList.add('active');
-
-    // Cargar datos específicos de la vista
-    switch (viewId) {
-        case 'dashboard':
-            fetchDevices();
-            fetchStats();
-            break;
-        case 'config':
-            fetchConfig();
-            break;
-        case 'logs':
-            fetchLogs();
-            break;
-    }
-}
-
-function loadInitialData() {
-    showView('dashboard');
-    fetchConfig(true); // Cargar configuración para mostrar el banner de Dry Run
-}
-
-// --- MANEJO DE ESTADO Y CONTROLES ---
-function handleSearch(event) {
-    appState.searchTerm = event.target.value;
-    appState.currentPage = 1; // Resetear a la primera página con cada nueva búsqueda
-    fetchDevices();
-}
-
-function handlePerPageChange(event) {
-    appState.perPage = event.target.value;
-    appState.currentPage = 1;
-    fetchDevices();
-}
-
-function handleSort(event) {
-    const newSortBy = event.currentTarget.dataset.sort;
-    if (appState.sortBy === newSortBy) {
-        appState.order = appState.order === 'asc' ? 'desc' : 'asc';
-    } else {
-        appState.sortBy = newSortBy;
-        appState.order = 'desc';
-    }
-    appState.currentPage = 1;
-    fetchDevices();
-}
-
-function handleSaveConfig(event) {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const configData = Object.fromEntries(formData.entries());
+    // === CONFIGURACIÓN GLOBAL Y ESTADO ===
+    const API_BASE_URL = '/api';
+    let appState = {
+        currentPage: 1,
+        perPage: 50,
+        sortBy: 'last_seen',
+        sortOrder: 'desc',
+        searchTerm: '',
+        autoRefresh: true,
+    };
+    let autoRefreshInterval = null;
+    const REFRESH_INTERVAL_MS = 10000;
     
-    // Asegurarnos de que los valores numéricos y booleanos se envíen correctamente
-    configData.auto_release_threshold_hours = parseInt(configData.auto_release_threshold_hours, 10);
-    configData.dry_run_enabled = formData.has('dry_run_enabled');
+    // Instancias de los gráficos para poder destruirlas y recrearlas
+    let releasesChart = null;
+    let activityChart = null;
 
-    updateConfig(configData);
-}
 
-function handleClearDatabase() {
-    showConfirmationModal(
-        'Limpiar Base de Datos',
-        '¿Estás seguro de que quieres eliminar <strong>todos los dispositivos y logs</strong>? Esta acción es irreversible.',
-        () => {
-            showSpinner();
-            fetch('/api/database/clear', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) throw new Error(data.error);
-                    showNotification('Éxito', 'La base de datos ha sido limpiada.', 'success');
-                    fetchDevices(); // Recargar datos para mostrar tablas vacías
-                    fetchStats();
-                    fetchLogs();
-                })
-                .catch(error => showNotification('Error', `No se pudo limpiar la base de datos: ${error.message}`, 'danger'))
-                .finally(hideSpinner);
+    // === ELEMENTOS DEL DOM ===
+    const spinner = document.getElementById('spinner-overlay');
+    const searchInput = document.getElementById('search-input');
+    const perPageSelect = document.getElementById('per-page-select');
+    const autoRefreshSwitch = document.getElementById('auto-refresh-switch');
+    const confirmationModalEl = document.getElementById('confirmationModal');
+    const confirmationModal = new bootstrap.Modal(confirmationModalEl);
+
+    const views = {
+        dashboard: document.getElementById('dashboard-view'),
+        stats: document.getElementById('stats-view'),
+        config: document.getElementById('config-view'),
+        logs: document.getElementById('logs-view'),
+    };
+
+    const navLinks = {
+        dashboard: document.getElementById('nav-dashboard'),
+        stats: document.getElementById('nav-stats'),
+        config: document.getElementById('nav-config'),
+        logs: document.getElementById('nav-logs'),
+    };
+
+
+    // === INICIALIZACIÓN ===
+    function init() {
+        setupEventListeners();
+        loadInitialData();
+        startAutoRefresh();
+    }
+
+    // === MANEJO DE VISTAS Y NAVEGACIÓN ===
+    function showView(viewName) {
+        Object.values(views).forEach(view => view.classList.add('d-none'));
+        Object.values(navLinks).forEach(link => link.classList.remove('active'));
+        
+        if (views[viewName]) {
+            views[viewName].classList.remove('d-none');
+            navLinks[viewName].classList.add('active');
         }
-    );
-}
 
-
-function toggleAutoRefresh() {
-    if (appState.autoRefreshEnabled && !appState.autoRefreshInterval) {
-        appState.autoRefreshInterval = setInterval(() => {
-            const currentView = document.querySelector('.nav-link.active').id.split('-')[1];
-            if (currentView === 'dashboard') {
-                fetchDevices();
-                fetchStats();
-            } else if (currentView === 'logs') {
+        // Cargar datos específicos de la vista si es necesario
+        switch (viewName) {
+            case 'dashboard':
+                fetchDataForDashboard();
+                break;
+            case 'stats':
+                // Cargar con el período por defecto (7 días)
+                fetchAndRenderStats('7d'); 
+                break;
+            case 'config':
+                fetchConfig();
+                break;
+            case 'logs':
                 fetchLogs();
+                break;
+        }
+    }
+
+    // === LÓGICA DE CARGA DE DATOS ===
+    async function fetchWithSpinner(url, options = {}) {
+        spinner.classList.remove('d-none');
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
             }
-        }, 10000); // 10 segundos
-    } else if (!appState.autoRefreshEnabled && appState.autoRefreshInterval) {
-        clearInterval(appState.autoRefreshInterval);
-        appState.autoRefreshInterval = null;
-    }
-}
-
-// --- FUNCIONES DE FETCH (LLAMADAS A LA API) ---
-function fetchDevices() {
-    const url = new URL('/api/devices', window.location.origin);
-    url.searchParams.append('page', appState.currentPage);
-    url.searchParams.append('per_page', appState.perPage);
-    url.searchParams.append('sort_by', appState.sortBy);
-    url.searchParams.append('order', appState.order);
-    if (appState.searchTerm) {
-        url.searchParams.append('search', appState.searchTerm);
+            return await response.json();
+        } catch (error) {
+            console.error('Fetch error:', error);
+            showNotification(`Error: ${error.message}`, 'danger');
+            throw error; // Propagar el error para que el llamador pueda manejarlo
+        } finally {
+            spinner.classList.add('d-none');
+        }
     }
 
-    fetch(url)
-        .then(response => response.json())
-        .then(data => {
-            renderDevices(data.items);
+    function loadInitialData() {
+        dayjs.extend(dayjs_plugin_relativeTime);
+        dayjs.extend(dayjs_plugin_localizedFormat);
+        dayjs.extend(dayjs_plugin_utc);
+        dayjs.locale('es');
+
+        perPageSelect.value = appState.perPage;
+        showView('dashboard');
+        fetchConfig(); // Cargar la configuración para mostrar el banner de Dry Run
+    }
+    
+    function fetchDataForDashboard() {
+        fetchStats();
+        fetchDevices();
+    }
+    
+    // === FUNCIONES DE LA API (FETCH) ===
+    async function fetchDevices() {
+        const { currentPage, perPage, sortBy, sortOrder, searchTerm } = appState;
+        const url = `${API_BASE_URL}/devices?page=${currentPage}&per_page=${perPage}&sort_by=${sortBy}&order=${sortOrder}&search=${searchTerm}`;
+        try {
+            const data = await fetchWithSpinner(url);
+            renderDevicesTable(data.items);
             renderPagination(data.pagination);
             updateSortIndicators();
-        })
-        .catch(error => console.error('Error al cargar dispositivos:', error));
-}
-
-function fetchStats() {
-    fetch('/api/stats')
-        .then(response => response.json())
-        .then(stats => {
-            document.getElementById('stats-total-devices').textContent = stats.total_devices || 0;
-            document.getElementById('stats-active-devices').textContent = stats.active_devices || 0;
-            document.getElementById('stats-released-ips').textContent = stats.released_ips || 0;
-        })
-        .catch(error => console.error('Error al cargar estadísticas:', error));
-}
-
-function fetchConfig(updateBanner = false) {
-    fetch('/api/config')
-        .then(response => response.json())
-        .then(config => {
-            document.getElementById('scan_subnet').value = config.scan_subnet || '';
-            document.getElementById('dhcp_server_ip').value = config.dhcp_server_ip || '';
-            document.getElementById('network_interface').value = config.network_interface || '';
-            document.getElementById('auto_release_threshold_hours').value = config.auto_release_threshold_hours || 0;
-            document.getElementById('mac_auto_release_list').value = config.mac_auto_release_list || '';
-            document.getElementById('dry_run_enabled').checked = config.dry_run_enabled;
-            if (updateBanner) {
-                renderDryRunBanner(config.dry_run_enabled);
-            }
-        })
-        .catch(error => console.error('Error al cargar la configuración:', error));
-}
-
-function updateConfig(configData) {
-    showSpinner();
-    fetch('/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configData)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) throw new Error(data.error);
-        showNotification('Éxito', 'La configuración ha sido guardada.', 'success');
-        renderDryRunBanner(data.config.dry_run_enabled);
-    })
-    .catch(error => showNotification('Error', `No se pudo guardar la configuración: ${error.message}`, 'danger'))
-    .finally(hideSpinner);
-}
-
-function fetchLogs() {
-    fetch('/api/logs?limit=200')
-        .then(response => response.json())
-        .then(logs => renderLogs(logs))
-        .catch(error => console.error('Error al cargar los logs:', error));
-}
-
-function performDeviceAction(url, method, body = null) {
-    showSpinner();
-    const options = {
-        method: method,
-        headers: { 'Content-Type': 'application/json' },
-    };
-    if (body) options.body = JSON.stringify(body);
-
-    fetch(url, options)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) throw new Error(data.error);
-            showNotification('Éxito', data.message, 'success');
-            fetchDevices(); // Recargar la lista de dispositivos
-            fetchStats();   // Actualizar estadísticas
-        })
-        .catch(error => showNotification('Error', `La operación falló: ${error.message}`, 'danger'))
-        .finally(hideSpinner);
-}
-
-
-// --- FUNCIONES DE RENDERIZADO ---
-function renderDevices(devices) {
-    const tableBody = document.getElementById('devices-table-body');
-    if (!devices || devices.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>';
-        return;
-    }
-
-    tableBody.innerHTML = devices.map(device => {
-        // --- LÓGICA DE INSIGNIAS MEJORADA CON TOOLTIPS ---
-        let statusBadge;
-        switch (device.status) {
-            case 'active':
-                statusBadge = `<span class="badge bg-success" title="Dispositivo visto en los últimos 5 minutos">active</span>`;
-                break;
-            case 'inactive':
-                statusBadge = `<span class="badge bg-warning text-dark" title="No se ha visto en más de 5 minutos. Es candidato para liberación si supera el umbral de horas configurado.">inactive</span>`;
-                break;
-            case 'released':
-                statusBadge = `<span class="badge bg-secondary" title="La concesión de IP de este dispositivo ha sido liberada manual o automáticamente.">released</span>`;
-                break;
-            default:
-                statusBadge = `<span class="badge bg-info">${device.status}</span>`;
+        } catch (error) {
+            console.error("No se pudieron cargar los dispositivos.");
         }
-        // --- FIN DE LA MEJORA ---
+    }
+
+    async function fetchStats() {
+        try {
+            const data = await fetch(`${API_BASE_URL}/stats`).then(res => res.json());
+            document.getElementById('stats-total-devices').textContent = data.total_devices;
+            document.getElementById('stats-active-devices').textContent = data.active_devices;
+            document.getElementById('stats-released-ips').textContent = data.released_ips;
+        } catch (error) {
+            console.error('Error fetching stats:', error);
+        }
+    }
+
+    async function fetchConfig() {
+        try {
+            const config = await fetchWithSpinner(`${API_BASE_URL}/config`);
+            const form = document.getElementById('config-form');
+            form.scan_subnet.value = config.scan_subnet;
+            form.dhcp_server_ip.value = config.dhcp_server_ip;
+            form.network_interface.value = config.network_interface;
+            form.auto_release_threshold_hours.value = config.auto_release_threshold_hours;
+            form.mac_auto_release_list.value = config.mac_auto_release_list;
+            form.dry_run_enabled.checked = config.dry_run_enabled;
+            renderDryRunBanner(config.dry_run_enabled);
+        } catch (error) {
+            console.error("No se pudo cargar la configuración.");
+        }
+    }
+
+    async function fetchLogs() {
+        try {
+            const logs = await fetchWithSpinner(`${API_BASE_URL}/logs?limit=200`);
+            renderLogs(logs);
+        } catch (error) {
+            console.error("No se pudieron cargar los logs.");
+        }
+    }
+
+    // === NUEVA FUNCIÓN PARA ESTADÍSTICAS HISTÓRICAS ===
+    async function fetchAndRenderStats(period = '7d') {
+        try {
+            const data = await fetchWithSpinner(`${API_BASE_URL}/stats/historical?period=${period}`);
+            renderReleasesChart(data);
+            renderActivityChart(data);
+
+            // Actualizar el estado activo de los botones del período
+            document.querySelectorAll('.period-selector').forEach(btn => {
+                btn.classList.remove('active');
+                btn.classList.add('btn-outline-primary');
+                btn.classList.remove('btn-primary');
+                if (btn.dataset.period === period) {
+                    btn.classList.add('active', 'btn-primary');
+                    btn.classList.remove('btn-outline-primary');
+                }
+            });
+
+        } catch (error) {
+            console.error(`No se pudieron cargar las estadísticas para el período ${period}.`);
+        }
+    }
+
+
+    // === LÓGICA DE RENDERIZADO ===
+    function renderDevicesTable(devices) {
+        const tableBody = document.getElementById('devices-table-body');
+        tableBody.innerHTML = '';
+        if (devices.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>';
+            return;
+        }
+
+        devices.forEach(device => {
+            const lastSeen = device.last_seen ? dayjs.utc(device.last_seen).fromNow() : 'Nunca';
+            const statusBadge = getStatusBadge(device.status);
+            const excludedBadge = device.is_excluded ? '<span class="badge bg-warning">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
+            const actions = `
+                <button class="btn btn-sm btn-info" onclick="window.app.releaseIp(${device.id}, '${device.ip_address}')" title="Liberar IP">Liberar</button>
+                <button class="btn btn-sm ${device.is_excluded ? 'btn-success' : 'btn-warning'}" onclick="window.app.toggleExclusion(${device.id}, ${!device.is_excluded})" title="${device.is_excluded ? 'Incluir dispositivo' : 'Excluir dispositivo'}">
+                    ${device.is_excluded ? 'Incluir' : 'Excluir'}
+                </button>
+            `;
+            const row = `
+                <tr>
+                    <td>${device.ip_address}</td>
+                    <td>${device.mac_address}</td>
+                    <td>${device.vendor || 'Desconocido'}</td>
+                    <td title="${dayjs.utc(device.last_seen).format('YYYY-MM-DD HH:mm:ss Z')}">${lastSeen}</td>
+                    <td>${statusBadge}</td>
+                    <td>${excludedBadge}</td>
+                    <td>${actions}</td>
+                </tr>
+            `;
+            tableBody.innerHTML += row;
+        });
+    }
+
+    function renderPagination(pagination) {
+        const controls = document.getElementById('pagination-controls');
+        if (pagination.total_pages <= 1) {
+            controls.innerHTML = '';
+            return;
+        }
+
+        let html = '<ul class="pagination pagination-sm mb-0">';
+        html += `<li class="page-item ${pagination.has_prev ? '' : 'disabled'}">
+                    <a class="page-link" href="#" data-page="${pagination.page - 1}">Anterior</a>
+                 </li>`;
         
-        const excludedBadge = device.is_excluded ? '<span class="badge bg-warning text-dark">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
+        // Lógica para mostrar un número limitado de páginas
+        const startPage = Math.max(1, pagination.page - 2);
+        const endPage = Math.min(pagination.total_pages, pagination.page + 2);
         
-        const lastSeenUTC = dayjs.utc(device.last_seen);
-        const lastSeen = device.last_seen 
-            ? `<span title="En tu hora local: ${lastSeenUTC.local().format('YYYY-MM-DD HH:mm:ss')}">${lastSeenUTC.fromNow()}</span>` 
-            : 'Nunca';
+        if (startPage > 1) {
+            html += `<li class="page-item"><a class="page-link" href="#" data-page="1">1</a></li>`;
+            if (startPage > 2) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        }
+        
+        for (let i = startPage; i <= endPage; i++) {
+            html += `<li class="page-item ${i === pagination.page ? 'active' : ''}">
+                        <a class="page-link" href="#" data-page="${i}">${i}</a>
+                     </li>`;
+        }
 
-        const excludeButton = device.is_excluded
-            ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleExclusion(${device.id}, false)" title="Permitir que este dispositivo sea gestionado por las reglas automáticas.">Incluir</button>`
-            : `<button class="btn btn-sm btn-secondary" onclick="toggleExclusion(${device.id}, true)" title="Proteger este dispositivo de la liberación automática.">Excluir</button>`;
+        if (endPage < pagination.total_pages) {
+            if (endPage < pagination.total_pages - 1) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            html += `<li class="page-item"><a class="page-link" href="#" data-page="${pagination.total_pages}">${pagination.total_pages}</a></li>`;
+        }
 
-        return `
-            <tr>
-                <td>${device.ip_address}</td>
-                <td>${device.mac_address}</td>
-                <td>${device.vendor || 'Desconocido'}</td>
-                <td>${lastSeen}</td>
-                <td>${statusBadge}</td>
-                <td>${excludedBadge}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="releaseIp(${device.id})">Liberar</button>
-                    ${excludeButton}
-                </td>
-            </tr>
-        `;
-    }).join('');
-}
-
-
-function renderPagination(pagination) {
-    const controls = document.getElementById('pagination-controls');
-    if (!pagination || pagination.total_pages <= 1) {
-        controls.innerHTML = '';
-        return;
+        html += `<li class="page-item ${pagination.has_next ? '' : 'disabled'}">
+                    <a class="page-link" href="#" data-page="${pagination.page + 1}">Siguiente</a>
+                 </li>`;
+        html += '</ul>';
+        controls.innerHTML = html;
     }
 
-    let html = `<nav aria-label="Navegación de dispositivos"><ul class="pagination pagination-sm mb-0">`;
+    function renderLogs(logs) {
+        const list = document.getElementById('logs-list');
+        list.innerHTML = logs.map(log => {
+            const levelClass = {
+                'INFO': 'list-group-item-light',
+                'WARNING': 'list-group-item-warning',
+                'ERROR': 'list-group-item-danger'
+            }[log.level] || '';
+            const timestamp = dayjs.utc(log.timestamp).local().format('YYYY-MM-DD HH:mm:ss');
+            return `<div class="list-group-item ${levelClass}">
+                        <div class="d-flex w-100 justify-content-between">
+                            <p class="mb-1">${log.message}</p>
+                            <small>${timestamp}</small>
+                        </div>
+                    </div>`;
+        }).join('');
+    }
 
-    // Botón de 'Anterior'
-    html += `<li class="page-item ${pagination.has_prev ? '' : 'disabled'}">
-        <a class="page-link" href="#" onclick="changePage(${pagination.page - 1})">Anterior</a>
-    </li>`;
-
-    // Páginas (lógica para mostrar un rango manejable)
-    const startPage = Math.max(1, pagination.page - 2);
-    const endPage = Math.min(pagination.total_pages, pagination.page + 2);
+    function renderDryRunBanner(isEnabled) {
+        const banner = document.getElementById('dry-run-banner');
+        if (isEnabled) {
+            banner.innerHTML = `
+                <div class="alert alert-warning text-center" role="alert">
+                    <strong>Modo Simulación (Dry Run) Activado.</strong> No se realizarán cambios reales en la red.
+                </div>`;
+        } else {
+            banner.innerHTML = '';
+        }
+    }
     
-    if (startPage > 1) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+    // === NUEVAS FUNCIONES PARA RENDERIZAR GRÁFICOS ===
+    function renderReleasesChart(data) {
+        const ctx = document.getElementById('releases-chart').getContext('2d');
+        if (releasesChart) {
+            releasesChart.destroy();
+        }
+        releasesChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    {
+                        label: data.datasets.releases[0].label, // Inactividad
+                        data: data.datasets.releases[0].data,
+                        backgroundColor: 'rgba(255, 159, 64, 0.7)',
+                    },
+                    {
+                        label: data.datasets.releases[1].label, // Lista MAC
+                        data: data.datasets.releases[1].data,
+                        backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                    },
+                    {
+                        label: data.datasets.releases[2].label, // Manual
+                        data: data.datasets.releases[2].data,
+                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'IPs Liberadas por Día y Causa'
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true,
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    function renderActivityChart(data) {
+        const ctx = document.getElementById('activity-chart').getContext('2d');
+        if (activityChart) {
+            activityChart.destroy();
+        }
+        activityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    {
+                        label: data.datasets.activity[0].label, // Pico Activos
+                        data: data.datasets.activity[0].data,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: data.datasets.activity[1].label, // Total Conocidos
+                        data: data.datasets.activity[1].data,
+                        borderColor: 'rgb(153, 102, 255)',
+                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                        fill: false,
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Evolución de Dispositivos en la Red'
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    // === MANEJO DE EVENTOS ===
+    function setupEventListeners() {
+        // Navegación
+        Object.keys(navLinks).forEach(key => {
+            navLinks[key].addEventListener('click', (e) => {
+                e.preventDefault();
+                showView(key);
+            });
+        });
+
+        // Búsqueda
+        let searchTimeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                appState.searchTerm = searchInput.value;
+                appState.currentPage = 1;
+                fetchDevices();
+            }, 300);
+        });
+        
+        // Paginación
+        document.getElementById('pagination-controls').addEventListener('click', (e) => {
+            if (e.target.tagName === 'A' && e.target.dataset.page) {
+                e.preventDefault();
+                appState.currentPage = parseInt(e.target.dataset.page, 10);
+                fetchDevices();
+            }
+        });
+
+        // Selección de por página
+        perPageSelect.addEventListener('change', () => {
+            appState.perPage = parseInt(perPageSelect.value, 10);
+            appState.currentPage = 1;
+            fetchDevices();
+        });
+
+        // Ordenación de columnas
+        document.querySelector('.table thead').addEventListener('click', (e) => {
+            const header = e.target.closest('th[data-sort]');
+            if (header) {
+                const sortBy = header.dataset.sort;
+                if (appState.sortBy === sortBy) {
+                    appState.sortOrder = appState.sortOrder === 'asc' ? 'desc' : 'asc';
+                } else {
+                    appState.sortBy = sortBy;
+                    appState.sortOrder = 'desc';
+                }
+                fetchDevices();
+            }
+        });
+
+        // Auto-refresco
+        autoRefreshSwitch.addEventListener('change', () => {
+            appState.autoRefresh = autoRefreshSwitch.checked;
+            if (appState.autoRefresh) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        });
+        
+        // Formulario de configuración
+        document.getElementById('config-form').addEventListener('submit', handleSaveConfig);
+
+        // Limpiar base de datos
+        document.getElementById('clear-database-btn').addEventListener('click', handleClearDatabase);
+        
+        // Selector de período para estadísticas
+        document.querySelectorAll('.period-selector').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const period = e.target.dataset.period;
+                fetchAndRenderStats(period);
+            });
+        });
+    }
+
+
+    // === MANEJADORES DE ACCIONES (HANDLERS) ===
+    async function handleSaveConfig(e) {
+        e.preventDefault();
+        const form = e.target;
+        const data = {
+            scan_subnet: form.scan_subnet.value,
+            dhcp_server_ip: form.dhcp_server_ip.value,
+            network_interface: form.network_interface.value,
+            auto_release_threshold_hours: parseInt(form.auto_release_threshold_hours.value, 10),
+            mac_auto_release_list: form.mac_auto_release_list.value,
+            dry_run_enabled: form.dry_run_enabled.checked
+        };
+
+        try {
+            const result = await fetchWithSpinner(`${API_BASE_URL}/config`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+            showNotification(result.message, 'success');
+            renderDryRunBanner(result.config.dry_run_enabled);
+        } catch (error) {
+            console.error("Error al guardar la configuración.");
+        }
+    }
+
+    function handleClearDatabase() {
+        showConfirmationModal(
+            '¿Estás seguro de que quieres limpiar la base de datos?',
+            'Esta acción es irreversible y eliminará todos los dispositivos, logs y estadísticas históricas.',
+            async () => {
+                try {
+                    const result = await fetchWithSpinner(`${API_BASE_URL}/database/clear`, { method: 'POST' });
+                    showNotification(result.message, 'success');
+                    if (views.dashboard.classList.contains('d-none') === false) {
+                        fetchDataForDashboard();
+                    }
+                    if (views.logs.classList.contains('d-none') === false) {
+                        fetchLogs();
+                    }
+                    if (views.stats.classList.contains('d-none') === false) {
+                        fetchAndRenderStats();
+                    }
+                } catch (error) {
+                    console.error("Error al limpiar la base de datos.");
+                }
+            }
+        );
+    }
     
-    for (let i = startPage; i <= endPage; i++) {
-        html += `<li class="page-item ${i === pagination.page ? 'active' : ''}">
-            <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
-        </li>`;
+    // === FUNCIONES DE UTILIDAD ===
+    function getStatusBadge(status) {
+        switch (status) {
+            case 'active': return '<span class="badge bg-success">Activo</span>';
+            case 'inactive': return '<span class="badge bg-secondary">Inactivo</span>';
+            case 'released': return '<span class="badge bg-dark">Liberado</span>';
+            default: return `<span class="badge bg-light text-dark">${status}</span>`;
+        }
+    }
+    
+    function updateSortIndicators() {
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            const span = th.querySelector('span');
+            if (th.dataset.sort === appState.sortBy) {
+                span.textContent = appState.sortOrder === 'asc' ? ' ▲' : ' ▼';
+            } else {
+                span.textContent = '';
+            }
+        });
     }
 
-    if (endPage < pagination.total_pages) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
-
-    // Botón de 'Siguiente'
-    html += `<li class="page-item ${pagination.has_next ? '' : 'disabled'}">
-        <a class="page-link" href="#" onclick="changePage(${pagination.page + 1})">Siguiente</a>
-    </li>`;
-
-    html += `</ul></nav>`;
-    controls.innerHTML = html;
-}
-
-function updateSortIndicators() {
-    document.querySelectorAll('.sortable span').forEach(span => span.textContent = '');
-    const activeHeader = document.querySelector(`.sortable[data-sort="${appState.sortBy}"] span`);
-    if (activeHeader) {
-        activeHeader.textContent = appState.order === 'asc' ? ' ▲' : ' ▼';
-    }
-}
-
-function renderLogs(logs) {
-    const list = document.getElementById('logs-list');
-    if (!logs || logs.length === 0) {
-        list.innerHTML = '<div class="list-group-item">No hay registros de actividad.</div>';
-        return;
+    function showNotification(message, type = 'info') {
+        const toastContainer = document.getElementById('notification-area');
+        const toastId = `toast-${Date.now()}`;
+        const toastHTML = `
+            <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="5000">
+                <div class="toast-header bg-${type} ${type === 'info' || type === 'light' ? '' : 'text-white'}">
+                    <strong class="me-auto">${type.charAt(0).toUpperCase() + type.slice(1)}</strong>
+                    <button type="button" class="btn-close ${type === 'info' || type === 'light' ? '' : 'btn-close-white'}" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+                <div class="toast-body">
+                    ${message}
+                </div>
+            </div>`;
+        toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+        const toastElement = document.getElementById(toastId);
+        const toast = new bootstrap.Toast(toastElement);
+        toast.show();
+        toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
     }
 
-    const levelMap = {
-        'INFO': { class: 'list-group-item-secondary', icon: 'ℹ️' },
-        'WARNING': { class: 'list-group-item-warning', icon: '⚠️' },
-        'ERROR': { class: 'list-group-item-danger', icon: '❌' }
+    function showConfirmationModal(title, body, onConfirm) {
+        confirmationModalEl.querySelector('#confirmationModalLabel').textContent = title;
+        confirmationModalEl.querySelector('#confirmationModalBody').textContent = body;
+        
+        const confirmBtn = confirmationModalEl.querySelector('#confirmActionButton');
+        // Clonar para remover listeners antiguos
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+
+        newConfirmBtn.addEventListener('click', () => {
+            onConfirm();
+            confirmationModal.hide();
+        });
+
+        confirmationModal.show();
+    }
+
+    // === MANEJO DE AUTO-REFRESCO ===
+    function startAutoRefresh() {
+        if (!autoRefreshInterval && appState.autoRefresh) {
+            autoRefreshInterval = setInterval(() => {
+                // Solo refresca la vista activa
+                if (!views.dashboard.classList.contains('d-none')) {
+                    fetchDataForDashboard();
+                }
+            }, REFRESH_INTERVAL_MS);
+        }
+    }
+    
+    function stopAutoRefresh() {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+    }
+    
+
+    // === EXPOSICIÓN DE FUNCIONES GLOBALES (para onclick) ===
+    window.app = {
+        releaseIp: (deviceId, ipAddress) => {
+            showConfirmationModal(
+                `Liberar IP ${ipAddress}`,
+                '¿Estás seguro de que quieres enviar una solicitud DHCPRELEASE para este dispositivo?',
+                async () => {
+                    try {
+                        const result = await fetchWithSpinner(`${API_BASE_URL}/devices/${deviceId}/release`, { method: 'POST' });
+                        showNotification(result.message, 'success');
+                        fetchDevices();
+                        fetchStats();
+                    } catch (error) {
+                        console.error("Error al liberar la IP.");
+                    }
+                }
+            );
+        },
+        toggleExclusion: async (deviceId, isExcluded) => {
+            const action = isExcluded ? "excluir" : "incluir";
+            try {
+                const result = await fetchWithSpinner(`${API_BASE_URL}/devices/${deviceId}/exclude`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_excluded: isExcluded }),
+                });
+                showNotification(result.message, 'success');
+                fetchDevices();
+            } catch (error) {
+                console.error(`Error al ${action} el dispositivo.`);
+            }
+        }
     };
 
-    list.innerHTML = logs.map(log => {
-        const config = levelMap[log.level] || levelMap['INFO'];
-        const logTime = dayjs.utc(log.timestamp).local().format('YYYY-MM-DD HH:mm:ss');
-        return `
-            <div class="list-group-item d-flex justify-content-between align-items-start ${config.class}">
-                <div class="ms-2 me-auto">
-                    <div class="fw-bold">${config.icon} ${log.level}</div>
-                    ${log.message}
-                </div>
-                <span class="badge bg-dark rounded-pill">${logTime}</span>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderDryRunBanner(isEnabled) {
-    const banner = document.getElementById('dry-run-banner');
-    if (isEnabled) {
-        banner.innerHTML = `
-            <div class="alert alert-warning" role="alert">
-                <strong>Modo Simulación (Dry Run) está ACTIVO.</strong> Las acciones automáticas y manuales de liberación de IP serán registradas, pero no ejecutadas.
-            </div>
-        `;
-    } else {
-        banner.innerHTML = '';
-    }
-}
-
-
-// --- ACCIONES DE DISPOSITIVO (invocadas desde los botones) ---
-function changePage(newPage) {
-    appState.currentPage = newPage;
-    fetchDevices();
-}
-
-function releaseIp(deviceId) {
-    performDeviceAction(`/api/devices/${deviceId}/release`, 'POST');
-}
-
-function toggleExclusion(deviceId, isExcluded) {
-    performDeviceAction(`/api/devices/${deviceId}/exclude`, 'PUT', { is_excluded: isExcluded });
-}
-
-
-// --- UTILIDADES (Spinner, Notificaciones, Modal) ---
-function showSpinner() {
-    document.getElementById('spinner-overlay').classList.remove('d-none');
-}
-
-function hideSpinner() {
-    document.getElementById('spinner-overlay').classList.add('d-none');
-}
-
-function showNotification(title, message, type = 'info') {
-    const notificationArea = document.getElementById('notification-area');
-    const toastId = `toast-${Date.now()}`;
-    const toastHTML = `
-        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-            <div class="toast-header">
-                <strong class="me-auto text-${type}">${title}</strong>
-                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-            </div>
-            <div class="toast-body">
-                ${message}
-            </div>
-        </div>
-    `;
-    notificationArea.insertAdjacentHTML('beforeend', toastHTML);
-    const toastElement = document.getElementById(toastId);
-    const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
-    toast.show();
-    toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
-}
-
-function showConfirmationModal(title, body, onConfirm) {
-    document.getElementById('confirmationModalLabel').textContent = title;
-    document.getElementById('confirmationModalBody').innerHTML = body;
-    
-    const confirmButton = document.getElementById('confirmActionButton');
-    
-    // Es importante remover el listener anterior para evitar que se acumulen
-    confirmButton.replaceWith(confirmButton.cloneNode(true));
-    document.getElementById('confirmActionButton').addEventListener('click', () => {
-        onConfirm();
-        confirmationModal.hide();
-    });
-
-    confirmationModal.show();
-}
+    // Iniciar la aplicación
+    init();
+});
