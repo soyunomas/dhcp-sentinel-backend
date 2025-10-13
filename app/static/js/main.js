@@ -1,632 +1,556 @@
+// app/static/js/main.js
+
 document.addEventListener('DOMContentLoaded', () => {
-    // === CONFIGURACIÓN GLOBAL Y ESTADO ===
-    const API_BASE_URL = '/api';
-    let appState = {
-        currentPage: 1,
-        perPage: 50,
-        sortBy: 'last_seen',
-        sortOrder: 'desc',
-        searchTerm: '',
-        autoRefresh: true,
-    };
-    let autoRefreshInterval = null;
-    const REFRESH_INTERVAL_MS = 10000;
-    
-    // Instancias de los gráficos para poder destruirlas y recrearlas
-    let releasesChart = null;
-    let activityChart = null;
 
+    // --- CONFIGURACIÓN INICIAL ---
+    dayjs.extend(window.dayjs_plugin_relativeTime);
+    dayjs.extend(window.dayjs_plugin_localizedFormat);
+    dayjs.extend(window.dayjs_plugin_utc);
+    dayjs.locale('es');
 
-    // === ELEMENTOS DEL DOM ===
-    const spinner = document.getElementById('spinner-overlay');
-    const searchInput = document.getElementById('search-input');
-    const perPageSelect = document.getElementById('per-page-select');
-    const autoRefreshSwitch = document.getElementById('auto-refresh-switch');
-    const confirmationModalEl = document.getElementById('confirmationModal');
-    const confirmationModal = new bootstrap.Modal(confirmationModalEl);
-
-    const views = {
-        dashboard: document.getElementById('dashboard-view'),
-        stats: document.getElementById('stats-view'),
-        config: document.getElementById('config-view'),
-        logs: document.getElementById('logs-view'),
-    };
-
-    const navLinks = {
-        dashboard: document.getElementById('nav-dashboard'),
-        stats: document.getElementById('nav-stats'),
-        config: document.getElementById('nav-config'),
-        logs: document.getElementById('nav-logs'),
-    };
-
-
-    // === INICIALIZACIÓN ===
-    function init() {
-        setupEventListeners();
-        loadInitialData();
-        startAutoRefresh();
-    }
-
-    // === MANEJO DE VISTAS Y NAVEGACIÓN ===
-    function showView(viewName) {
-        Object.values(views).forEach(view => view.classList.add('d-none'));
-        Object.values(navLinks).forEach(link => link.classList.remove('active'));
-        
-        if (views[viewName]) {
-            views[viewName].classList.remove('d-none');
-            navLinks[viewName].classList.add('active');
+    // --- ESTADO DE LA APLICACIÓN ---
+    const appState = {
+        currentView: 'dashboard',
+        autoRefreshInterval: null,
+        autoRefreshEnabled: true,
+        debounceTimer: null,
+        pagination: {
+            page: 1,
+            per_page: 50,
+            sort_by: 'last_seen',
+            order: 'desc',
+            search: ''
+        },
+        charts: {
+            releases: null,
+            activity: null
         }
+    };
 
-        // Cargar datos específicos de la vista si es necesario
-        switch (viewName) {
-            case 'dashboard':
-                fetchDataForDashboard();
-                break;
-            case 'stats':
-                // Cargar con el período por defecto (7 días)
-                fetchAndRenderStats('7d'); 
-                break;
-            case 'config':
-                fetchConfig();
-                break;
-            case 'logs':
-                fetchLogs();
-                break;
+    // --- SELECTORES DE ELEMENTOS DEL DOM ---
+    const elements = {
+        views: {
+            dashboard: document.getElementById('dashboard-view'),
+            stats: document.getElementById('stats-view'),
+            config: document.getElementById('config-view'),
+            logs: document.getElementById('logs-view')
+        },
+        navLinks: {
+            dashboard: document.getElementById('nav-dashboard'),
+            stats: document.getElementById('nav-stats'),
+            config: document.getElementById('nav-config'),
+            logs: document.getElementById('nav-logs')
+        },
+        dashboard: {
+            statsTotal: document.getElementById('stats-total-devices'),
+            statsActive: document.getElementById('stats-active-devices'),
+            statsReleased: document.getElementById('stats-released-ips'),
+            searchInput: document.getElementById('search-input'),
+            perPageSelect: document.getElementById('per-page-select'),
+            tableBody: document.getElementById('devices-table-body'),
+            paginationControls: document.getElementById('pagination-controls'),
+            tableHeaders: document.querySelectorAll('.sortable')
+        },
+        stats: {
+            periodSelectors: document.querySelectorAll('.period-selector'),
+            releasesChartCanvas: document.getElementById('releases-chart'),
+            activityChartCanvas: document.getElementById('activity-chart')
+        },
+        config: {
+            form: document.getElementById('config-form'),
+            clearDbBtn: document.getElementById('clear-database-btn'),
+            dryRunBanner: document.getElementById('dry-run-banner')
+        },
+        logs: {
+            list: document.getElementById('logs-list'),
+            filter: document.getElementById('log-filter-select') // <-- NUEVO SELECTOR
+        },
+        general: {
+            autoRefreshSwitch: document.getElementById('auto-refresh-switch'),
+            spinnerOverlay: document.getElementById('spinner-overlay'),
+            notificationArea: document.getElementById('notification-area'),
+            confirmationModal: new bootstrap.Modal(document.getElementById('confirmationModal')),
+            confirmationModalBody: document.getElementById('confirmationModalBody'),
+            confirmActionButton: document.getElementById('confirmActionButton')
         }
-    }
+    };
 
-    // === LÓGICA DE CARGA DE DATOS ===
-    async function fetchWithSpinner(url, options = {}) {
-        spinner.classList.remove('d-none');
+    // --- FUNCIONES CORE ---
+
+    /**
+     * Wrapper centralizado para las llamadas a la API.
+     * Incluye automáticamente el token CSRF y gestiona el spinner de carga.
+     * @param {string} url - El endpoint de la API.
+     * @param {object} options - Opciones para la función fetch.
+     * @returns {Promise<any>} - La respuesta JSON de la API.
+     */
+    const fetchAPI = async (url, options = {}) => {
+        showSpinner();
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        const defaultHeaders = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRFToken': csrfToken
+        };
+        options.headers = { ...defaultHeaders, ...options.headers };
+
         try {
             const response = await fetch(url, options);
+            if (response.status === 401) {
+                // Si la sesión ha expirado, redirigir al login
+                window.location.href = '/login';
+                return;
+            }
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({ error: 'Error de comunicación con el servidor.' }));
+                throw new Error(errorData.error || `Error ${response.status}`);
             }
             return await response.json();
         } catch (error) {
-            console.error('Fetch error:', error);
             showNotification(`Error: ${error.message}`, 'danger');
-            throw error; // Propagar el error para que el llamador pueda manejarlo
+            throw error; // Propagar el error para que la función que llama pueda manejarlo
         } finally {
-            spinner.classList.add('d-none');
+            hideSpinner();
         }
-    }
+    };
 
-    function loadInitialData() {
-        dayjs.extend(dayjs_plugin_relativeTime);
-        dayjs.extend(dayjs_plugin_localizedFormat);
-        dayjs.extend(dayjs_plugin_utc);
-        dayjs.locale('es');
+    /**
+     * Cambia la vista activa en la interfaz.
+     * @param {string} viewName - El nombre de la vista a mostrar (dashboard, stats, config, logs).
+     */
+    const switchView = (viewName) => {
+        appState.currentView = viewName;
+        Object.values(elements.views).forEach(view => view.classList.add('d-none'));
+        Object.values(elements.navLinks).forEach(link => link.classList.remove('active'));
 
-        perPageSelect.value = appState.perPage;
-        showView('dashboard');
-        fetchConfig(); // Cargar la configuración para mostrar el banner de Dry Run
-    }
+        elements.views[viewName].classList.remove('d-none');
+        elements.navLinks[viewName].classList.add('active');
+
+        // Detener el refresco automático si no estamos en el dashboard
+        if (viewName !== 'dashboard') {
+            stopAutoRefresh();
+        } else if (appState.autoRefreshEnabled) {
+            startAutoRefresh();
+        }
+
+        // Cargar los datos de la vista seleccionada
+        switch (viewName) {
+            case 'dashboard':
+                loadDashboardData();
+                break;
+            case 'stats':
+                loadHistoricalStats();
+                break;
+            case 'config':
+                loadConfigData();
+                break;
+            case 'logs':
+                loadLogsData();
+                break;
+        }
+    };
+
+    // --- FUNCIONES DE CARGA DE DATOS ---
+    const loadDashboardData = () => {
+        fetchAPI('/api/stats').then(data => {
+            elements.dashboard.statsTotal.textContent = data.total_devices;
+            elements.dashboard.statsActive.textContent = data.active_devices;
+            elements.dashboard.statsReleased.textContent = data.released_ips;
+        });
+        loadDevices();
+    };
     
-    function fetchDataForDashboard() {
-        fetchStats();
-        fetchDevices();
-    }
-    
-    // === FUNCIONES DE LA API (FETCH) ===
-    async function fetchDevices() {
-        const { currentPage, perPage, sortBy, sortOrder, searchTerm } = appState;
-        const url = `${API_BASE_URL}/devices?page=${currentPage}&per_page=${perPage}&sort_by=${sortBy}&order=${sortOrder}&search=${searchTerm}`;
-        try {
-            const data = await fetchWithSpinner(url);
-            renderDevicesTable(data.items);
+    const loadDevices = () => {
+        const { page, per_page, sort_by, order, search } = appState.pagination;
+        const url = `/api/devices?page=${page}&per_page=${per_page}&sort_by=${sort_by}&order=${order}&search=${search}`;
+        fetchAPI(url).then(data => {
+            renderDevices(data.items);
             renderPagination(data.pagination);
-            updateSortIndicators();
-        } catch (error) {
-            console.error("No se pudieron cargar los dispositivos.");
-        }
-    }
+        });
+    };
 
-    async function fetchStats() {
-        try {
-            const data = await fetch(`${API_BASE_URL}/stats`).then(res => res.json());
-            document.getElementById('stats-total-devices').textContent = data.total_devices;
-            document.getElementById('stats-active-devices').textContent = data.active_devices;
-            document.getElementById('stats-released-ips').textContent = data.released_ips;
-        } catch (error) {
-            console.error('Error fetching stats:', error);
-        }
-    }
+    const loadConfigData = () => {
+        fetchAPI('/api/config').then(config => {
+            renderConfig(config);
+        });
+    };
 
-    async function fetchConfig() {
-        try {
-            const config = await fetchWithSpinner(`${API_BASE_URL}/config`);
-            const form = document.getElementById('config-form');
-            form.scan_subnet.value = config.scan_subnet;
-            form.dhcp_server_ip.value = config.dhcp_server_ip;
-            form.network_interface.value = config.network_interface;
-            form.auto_release_threshold_hours.value = config.auto_release_threshold_hours;
-            form.mac_auto_release_list.value = config.mac_auto_release_list;
-            form.dry_run_enabled.checked = config.dry_run_enabled;
-            renderDryRunBanner(config.dry_run_enabled);
-        } catch (error) {
-            console.error("No se pudo cargar la configuración.");
-        }
-    }
-
-    async function fetchLogs() {
-        try {
-            const logs = await fetchWithSpinner(`${API_BASE_URL}/logs?limit=200`);
+    // --- INICIO DE MODIFICACIÓN ---
+    const loadLogsData = () => {
+        const eventType = elements.logs.filter.value;
+        fetchAPI(`/api/logs?limit=200&event_type=${eventType}`).then(logs => {
             renderLogs(logs);
-        } catch (error) {
-            console.error("No se pudieron cargar los logs.");
-        }
-    }
+        });
+    };
+    // --- FIN DE MODIFICACIÓN ---
+    
+    const loadHistoricalStats = (period = '7d') => {
+        fetchAPI(`/api/stats/historical?period=${period}`).then(data => {
+            renderStatsCharts(data);
+        });
+    };
+    
+    const loadInitialConfig = () => {
+        fetchAPI('/api/config').then(config => {
+            updateDryRunBanner(config.dry_run_enabled);
+        });
+    };
 
-    // === NUEVA FUNCIÓN PARA ESTADÍSTICAS HISTÓRICAS ===
-    async function fetchAndRenderStats(period = '7d') {
-        try {
-            const data = await fetchWithSpinner(`${API_BASE_URL}/stats/historical?period=${period}`);
-            renderReleasesChart(data);
-            renderActivityChart(data);
-
-            // Actualizar el estado activo de los botones del período
-            document.querySelectorAll('.period-selector').forEach(btn => {
-                btn.classList.remove('active');
-                btn.classList.add('btn-outline-primary');
-                btn.classList.remove('btn-primary');
-                if (btn.dataset.period === period) {
-                    btn.classList.add('active', 'btn-primary');
-                    btn.classList.remove('btn-outline-primary');
-                }
-            });
-
-        } catch (error) {
-            console.error(`No se pudieron cargar las estadísticas para el período ${period}.`);
-        }
-    }
-
-
-    // === LÓGICA DE RENDERIZADO ===
-    function renderDevicesTable(devices) {
-        const tableBody = document.getElementById('devices-table-body');
+    // --- FUNCIONES DE RENDERIZADO ---
+    const renderDevices = (devices) => {
+        const tableBody = elements.dashboard.tableBody;
         tableBody.innerHTML = '';
         if (devices.length === 0) {
-            tableBody.innerHTML = '<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>';
+            tableBody.innerHTML = `<tr><td colspan="7" class="text-center">No se encontraron dispositivos.</td></tr>`;
             return;
         }
 
         devices.forEach(device => {
-            const lastSeen = device.last_seen ? dayjs.utc(device.last_seen).fromNow() : 'Nunca';
-            const statusBadge = getStatusBadge(device.status);
-            const excludedBadge = device.is_excluded ? '<span class="badge bg-warning">Sí</span>' : '<span class="badge bg-light text-dark">No</span>';
-            const actions = `
-                <button class="btn btn-sm btn-info" onclick="window.app.releaseIp(${device.id}, '${device.ip_address}')" title="Liberar IP">Liberar</button>
-                <button class="btn btn-sm ${device.is_excluded ? 'btn-success' : 'btn-warning'}" onclick="window.app.toggleExclusion(${device.id}, ${!device.is_excluded})" title="${device.is_excluded ? 'Incluir dispositivo' : 'Excluir dispositivo'}">
-                    ${device.is_excluded ? 'Incluir' : 'Excluir'}
-                </button>
-            `;
+            const statusClass = device.status === 'active' ? 'bg-success' : (device.status === 'inactive' ? 'bg-warning' : 'bg-secondary');
             const row = `
                 <tr>
                     <td>${device.ip_address}</td>
                     <td>${device.mac_address}</td>
                     <td>${device.vendor || 'Desconocido'}</td>
-                    <td title="${dayjs.utc(device.last_seen).format('YYYY-MM-DD HH:mm:ss Z')}">${lastSeen}</td>
-                    <td>${statusBadge}</td>
-                    <td>${excludedBadge}</td>
-                    <td>${actions}</td>
+                    <td>${dayjs.utc(device.last_seen).fromNow()}</td>
+                    <td><span class="badge ${statusClass}">${device.status}</span></td>
+                    <td>${device.is_excluded ? 'Sí' : 'No'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary release-btn" data-id="${device.id}" title="Liberar IP">Liberar</button>
+                        <button class="btn btn-sm ${device.is_excluded ? 'btn-success' : 'btn-warning'} exclude-btn" data-id="${device.id}" data-excluded="${device.is_excluded}" title="${device.is_excluded ? 'Incluir en automatización' : 'Excluir de automatización'}">
+                            ${device.is_excluded ? 'Incluir' : 'Excluir'}
+                        </button>
+                    </td>
                 </tr>
             `;
-            tableBody.innerHTML += row;
+            tableBody.insertAdjacentHTML('beforeend', row);
         });
-    }
+    };
 
-    function renderPagination(pagination) {
-        const controls = document.getElementById('pagination-controls');
-        if (pagination.total_pages <= 1) {
-            controls.innerHTML = '';
-            return;
-        }
-
-        let html = '<ul class="pagination pagination-sm mb-0">';
-        html += `<li class="page-item ${pagination.has_prev ? '' : 'disabled'}">
-                    <a class="page-link" href="#" data-page="${pagination.page - 1}">Anterior</a>
+    const renderPagination = (pagination) => {
+        const controls = elements.dashboard.paginationControls;
+        controls.innerHTML = '';
+        let html = '<ul class="pagination mb-0">';
+        
+        html += `<li class="page-item ${!pagination.has_prev ? 'disabled' : ''}">
+                   <a class="page-link" href="#" data-page="${pagination.page - 1}">Anterior</a>
                  </li>`;
-        
-        // Lógica para mostrar un número limitado de páginas
-        const startPage = Math.max(1, pagination.page - 2);
-        const endPage = Math.min(pagination.total_pages, pagination.page + 2);
-        
-        if (startPage > 1) {
+
+        const start = Math.max(1, pagination.page - 2);
+        const end = Math.min(pagination.total_pages, pagination.page + 2);
+
+        if (start > 1) {
             html += `<li class="page-item"><a class="page-link" href="#" data-page="1">1</a></li>`;
-            if (startPage > 2) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            if (start > 2) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
         }
-        
-        for (let i = startPage; i <= endPage; i++) {
+
+        for (let i = start; i <= end; i++) {
             html += `<li class="page-item ${i === pagination.page ? 'active' : ''}">
-                        <a class="page-link" href="#" data-page="${i}">${i}</a>
+                       <a class="page-link" href="#" data-page="${i}">${i}</a>
                      </li>`;
         }
 
-        if (endPage < pagination.total_pages) {
-            if (endPage < pagination.total_pages - 1) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        if (end < pagination.total_pages) {
+            if (end < pagination.total_pages - 1) html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
             html += `<li class="page-item"><a class="page-link" href="#" data-page="${pagination.total_pages}">${pagination.total_pages}</a></li>`;
         }
-
-        html += `<li class="page-item ${pagination.has_next ? '' : 'disabled'}">
-                    <a class="page-link" href="#" data-page="${pagination.page + 1}">Siguiente</a>
+        
+        html += `<li class="page-item ${!pagination.has_next ? 'disabled' : ''}">
+                   <a class="page-link" href="#" data-page="${pagination.page + 1}">Siguiente</a>
                  </li>`;
         html += '</ul>';
         controls.innerHTML = html;
-    }
+    };
+    
+    const renderConfig = (config) => {
+        const form = elements.config.form;
+        form.scan_subnet.value = config.scan_subnet;
+        form.dhcp_server_ip.value = config.dhcp_server_ip;
+        form.network_interface.value = config.network_interface;
+        form.auto_release_threshold_hours.value = config.auto_release_threshold_hours;
+        form.mac_auto_release_list.value = config.mac_auto_release_list;
+        form.dry_run_enabled.checked = config.dry_run_enabled;
+    };
+    
+    const renderLogs = (logs) => {
+        const list = elements.logs.list;
+        list.innerHTML = '';
+        if (logs.length === 0) {
+            list.innerHTML = '<div class="list-group-item">No hay logs para el filtro seleccionado.</div>';
+            return;
+        }
 
-    function renderLogs(logs) {
-        const list = document.getElementById('logs-list');
-        list.innerHTML = logs.map(log => {
+        logs.forEach(log => {
             const levelClass = {
-                'INFO': 'list-group-item-light',
+                'INFO': 'list-group-item-info',
                 'WARNING': 'list-group-item-warning',
                 'ERROR': 'list-group-item-danger'
             }[log.level] || '';
-            const timestamp = dayjs.utc(log.timestamp).local().format('YYYY-MM-DD HH:mm:ss');
-            return `<div class="list-group-item ${levelClass}">
-                        <div class="d-flex w-100 justify-content-between">
-                            <p class="mb-1">${log.message}</p>
-                            <small>${timestamp}</small>
-                        </div>
-                    </div>`;
-        }).join('');
-    }
+            const item = `
+                <div class="list-group-item ${levelClass}">
+                    <div class="d-flex w-100 justify-content-between">
+                        <small class="text-muted">${dayjs(log.timestamp).format('YYYY-MM-DD HH:mm:ss')}</small>
+                        <span class="badge bg-secondary">${log.level}</span>
+                    </div>
+                    <p class="mb-1">${log.message}</p>
+                </div>
+            `;
+            list.insertAdjacentHTML('beforeend', item);
+        });
+    };
 
-    function renderDryRunBanner(isEnabled) {
-        const banner = document.getElementById('dry-run-banner');
-        if (isEnabled) {
-            banner.innerHTML = `
-                <div class="alert alert-warning text-center" role="alert">
-                    <strong>Modo Simulación (Dry Run) Activado.</strong> No se realizarán cambios reales en la red.
-                </div>`;
-        } else {
-            banner.innerHTML = '';
-        }
-    }
-    
-    // === NUEVAS FUNCIONES PARA RENDERIZAR GRÁFICOS ===
-    function renderReleasesChart(data) {
-        const ctx = document.getElementById('releases-chart').getContext('2d');
-        if (releasesChart) {
-            releasesChart.destroy();
-        }
-        releasesChart = new Chart(ctx, {
+    const renderStatsCharts = (data) => {
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true } }
+        };
+
+        if (appState.charts.releases) appState.charts.releases.destroy();
+        appState.charts.releases = new Chart(elements.stats.releasesChartCanvas, {
             type: 'bar',
             data: {
                 labels: data.labels,
-                datasets: [
-                    {
-                        label: data.datasets.releases[0].label, // Inactividad
-                        data: data.datasets.releases[0].data,
-                        backgroundColor: 'rgba(255, 159, 64, 0.7)',
-                    },
-                    {
-                        label: data.datasets.releases[1].label, // Lista MAC
-                        data: data.datasets.releases[1].data,
-                        backgroundColor: 'rgba(255, 99, 132, 0.7)',
-                    },
-                    {
-                        label: data.datasets.releases[2].label, // Manual
-                        data: data.datasets.releases[2].data,
-                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
-                    }
-                ]
+                datasets: data.datasets.releases.map(ds => ({
+                    ...ds,
+                    backgroundColor: ds.label.includes('Inactividad') ? 'rgba(255, 159, 64, 0.5)' : 
+                                     ds.label.includes('MAC') ? 'rgba(255, 99, 132, 0.5)' : 'rgba(54, 162, 235, 0.5)',
+                    borderColor: ds.label.includes('Inactividad') ? 'rgba(255, 159, 64, 1)' :
+                                 ds.label.includes('MAC') ? 'rgba(255, 99, 132, 1)' : 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }))
             },
-            options: {
-                responsive: true,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'IPs Liberadas por Día y Causa'
-                    },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false
-                    }
-                },
-                scales: {
-                    x: {
-                        stacked: true,
-                    },
-                    y: {
-                        stacked: true,
-                        beginAtZero: true
-                    }
-                }
-            }
+            options: chartOptions
         });
-    }
 
-    function renderActivityChart(data) {
-        const ctx = document.getElementById('activity-chart').getContext('2d');
-        if (activityChart) {
-            activityChart.destroy();
-        }
-        activityChart = new Chart(ctx, {
+        if (appState.charts.activity) appState.charts.activity.destroy();
+        appState.charts.activity = new Chart(elements.stats.activityChartCanvas, {
             type: 'line',
             data: {
                 labels: data.labels,
-                datasets: [
-                    {
-                        label: data.datasets.activity[0].label, // Pico Activos
-                        data: data.datasets.activity[0].data,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                        fill: true,
-                        tension: 0.1
-                    },
-                    {
-                        label: data.datasets.activity[1].label, // Total Conocidos
-                        data: data.datasets.activity[1].data,
-                        borderColor: 'rgb(153, 102, 255)',
-                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
-                        fill: false,
-                        tension: 0.1
-                    }
-                ]
+                datasets: data.datasets.activity.map(ds => ({
+                    ...ds,
+                    fill: false,
+                    tension: 0.1,
+                    borderColor: ds.label.includes('Pico') ? 'rgba(75, 192, 192, 1)' : 'rgba(153, 102, 255, 1)',
+                }))
             },
-            options: {
-                responsive: true,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Evolución de Dispositivos en la Red'
-                    },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true
-                    }
-                }
-            }
+            options: chartOptions
         });
-    }
+    };
 
-    // === MANEJO DE EVENTOS ===
-    function setupEventListeners() {
-        // Navegación
-        Object.keys(navLinks).forEach(key => {
-            navLinks[key].addEventListener('click', (e) => {
-                e.preventDefault();
-                showView(key);
-            });
+    const updateDryRunBanner = (isEnabled) => {
+        if (isEnabled) {
+            elements.config.dryRunBanner.innerHTML = `
+                <div class="alert alert-warning" role="alert">
+                    <strong>Modo Simulación (Dry Run) está activado.</strong> No se realizarán cambios reales en la red.
+                </div>
+            `;
+        } else {
+            elements.config.dryRunBanner.innerHTML = '';
+        }
+    };
+    
+    // --- MANEJADORES DE EVENTOS ---
+    
+    // Navegación
+    Object.entries(elements.navLinks).forEach(([name, link]) => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchView(name);
         });
+    });
 
-        // Búsqueda
-        let searchTimeout;
-        searchInput.addEventListener('input', () => {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                appState.searchTerm = searchInput.value;
-                appState.currentPage = 1;
-                fetchDevices();
-            }, 300);
-        });
-        
-        // Paginación
-        document.getElementById('pagination-controls').addEventListener('click', (e) => {
-            if (e.target.tagName === 'A' && e.target.dataset.page) {
-                e.preventDefault();
-                appState.currentPage = parseInt(e.target.dataset.page, 10);
-                fetchDevices();
-            }
-        });
-
-        // Selección de por página
-        perPageSelect.addEventListener('change', () => {
-            appState.perPage = parseInt(perPageSelect.value, 10);
-            appState.currentPage = 1;
-            fetchDevices();
-        });
-
-        // Ordenación de columnas
-        document.querySelector('.table thead').addEventListener('click', (e) => {
-            const header = e.target.closest('th[data-sort]');
-            if (header) {
-                const sortBy = header.dataset.sort;
-                if (appState.sortBy === sortBy) {
-                    appState.sortOrder = appState.sortOrder === 'asc' ? 'desc' : 'asc';
-                } else {
-                    appState.sortBy = sortBy;
-                    appState.sortOrder = 'desc';
-                }
-                fetchDevices();
-            }
-        });
-
-        // Auto-refresco
-        autoRefreshSwitch.addEventListener('change', () => {
-            appState.autoRefresh = autoRefreshSwitch.checked;
-            if (appState.autoRefresh) {
-                startAutoRefresh();
+    // Dashboard: Ordenación de tabla
+    elements.dashboard.tableHeaders.forEach(header => {
+        header.addEventListener('click', () => {
+            const sortBy = header.dataset.sort;
+            if (appState.pagination.sort_by === sortBy) {
+                appState.pagination.order = appState.pagination.order === 'asc' ? 'desc' : 'asc';
             } else {
-                stopAutoRefresh();
+                appState.pagination.sort_by = sortBy;
+                appState.pagination.order = 'desc';
             }
+            updateSortIndicators();
+            loadDevices();
         });
-        
-        // Formulario de configuración
-        document.getElementById('config-form').addEventListener('submit', handleSaveConfig);
+    });
 
-        // Limpiar base de datos
-        document.getElementById('clear-database-btn').addEventListener('click', handleClearDatabase);
-        
-        // Selector de período para estadísticas
-        document.querySelectorAll('.period-selector').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const period = e.target.dataset.period;
-                fetchAndRenderStats(period);
-            });
-        });
-    }
-
-
-    // === MANEJADORES DE ACCIONES (HANDLERS) ===
-    async function handleSaveConfig(e) {
+    // Dashboard: Búsqueda
+    elements.dashboard.searchInput.addEventListener('input', () => {
+        clearTimeout(appState.debounceTimer);
+        appState.debounceTimer = setTimeout(() => {
+            appState.pagination.search = elements.dashboard.searchInput.value;
+            appState.pagination.page = 1;
+            loadDevices();
+        }, 300);
+    });
+    
+    // Dashboard: Paginación
+    elements.dashboard.paginationControls.addEventListener('click', (e) => {
         e.preventDefault();
-        const form = e.target;
-        const data = {
-            scan_subnet: form.scan_subnet.value,
-            dhcp_server_ip: form.dhcp_server_ip.value,
-            network_interface: form.network_interface.value,
-            auto_release_threshold_hours: parseInt(form.auto_release_threshold_hours.value, 10),
-            mac_auto_release_list: form.mac_auto_release_list.value,
-            dry_run_enabled: form.dry_run_enabled.checked
-        };
+        if (e.target.tagName === 'A' && e.target.dataset.page) {
+            appState.pagination.page = parseInt(e.target.dataset.page, 10);
+            loadDevices();
+        }
+    });
+    
+    // Dashboard: Selección de por página
+    elements.dashboard.perPageSelect.addEventListener('change', () => {
+        appState.pagination.per_page = parseInt(elements.dashboard.perPageSelect.value, 10);
+        appState.pagination.page = 1;
+        loadDevices();
+    });
 
-        try {
-            const result = await fetchWithSpinner(`${API_BASE_URL}/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
+    // Dashboard: Botones de acción en la tabla
+    elements.dashboard.tableBody.addEventListener('click', (e) => {
+        const target = e.target;
+        const deviceId = target.dataset.id;
+        if (!deviceId) return;
+
+        if (target.classList.contains('release-btn')) {
+            showConfirmationModal('¿Estás seguro de que quieres liberar la IP de este dispositivo?', () => {
+                fetchAPI(`/api/devices/${deviceId}/release`, { method: 'POST' })
+                    .then(data => {
+                        showNotification(data.message, 'success');
+                        loadDashboardData();
+                    });
             });
-            showNotification(result.message, 'success');
-            renderDryRunBanner(result.config.dry_run_enabled);
-        } catch (error) {
-            console.error("Error al guardar la configuración.");
+        } else if (target.classList.contains('exclude-btn')) {
+            const isExcluded = target.dataset.excluded === 'true';
+            const actionText = isExcluded ? 'incluir este dispositivo en las reglas automáticas' : 'excluir este dispositivo de las reglas automáticas';
+            showConfirmationModal(`¿Estás seguro de que quieres ${actionText}?`, () => {
+                fetchAPI(`/api/devices/${deviceId}/exclude`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ is_excluded: !isExcluded })
+                }).then(data => {
+                    showNotification(data.message, 'success');
+                    loadDevices();
+                });
+            });
         }
-    }
+    });
+    
+    // Stats: Selector de período
+    elements.stats.periodSelectors.forEach(button => {
+        button.addEventListener('click', () => {
+            elements.stats.periodSelectors.forEach(btn => btn.classList.remove('btn-primary', 'active'));
+            elements.stats.periodSelectors.forEach(btn => btn.classList.add('btn-outline-primary'));
+            button.classList.add('btn-primary', 'active');
+            button.classList.remove('btn-outline-primary');
+            loadHistoricalStats(button.dataset.period);
+        });
+    });
 
-    function handleClearDatabase() {
-        showConfirmationModal(
-            '¿Estás seguro de que quieres limpiar la base de datos?',
-            'Esta acción es irreversible y eliminará todos los dispositivos, logs y estadísticas históricas.',
-            async () => {
-                try {
-                    const result = await fetchWithSpinner(`${API_BASE_URL}/database/clear`, { method: 'POST' });
-                    showNotification(result.message, 'success');
-                    if (views.dashboard.classList.contains('d-none') === false) {
-                        fetchDataForDashboard();
-                    }
-                    if (views.logs.classList.contains('d-none') === false) {
-                        fetchLogs();
-                    }
-                    if (views.stats.classList.contains('d-none') === false) {
-                        fetchAndRenderStats();
-                    }
-                } catch (error) {
-                    console.error("Error al limpiar la base de datos.");
-                }
-            }
-        );
-    }
+    // Config: Guardar formulario
+    elements.config.form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(elements.config.form);
+        const data = Object.fromEntries(formData.entries());
+        data.auto_release_threshold_hours = parseInt(data.auto_release_threshold_hours, 10);
+        data.dry_run_enabled = elements.config.form.dry_run_enabled.checked;
+
+        fetchAPI('/api/config', {
+            method: 'PUT',
+            body: JSON.stringify(data)
+        }).then(response => {
+            showNotification(response.message, 'success');
+            updateDryRunBanner(response.config.dry_run_enabled);
+        });
+    });
     
-    // === FUNCIONES DE UTILIDAD ===
-    function getStatusBadge(status) {
-        switch (status) {
-            case 'active': return '<span class="badge bg-success">Activo</span>';
-            case 'inactive': return '<span class="badge bg-secondary">Inactivo</span>';
-            case 'released': return '<span class="badge bg-dark">Liberado</span>';
-            default: return `<span class="badge bg-light text-dark">${status}</span>`;
+    // Config: Limpiar base de datos
+    elements.config.clearDbBtn.addEventListener('click', () => {
+        showConfirmationModal('¡ACCIÓN DESTRUCTIVA! ¿Estás seguro de que quieres eliminar TODOS los dispositivos, logs y estadísticas?', () => {
+            fetchAPI('/api/database/clear', { method: 'POST' })
+                .then(data => {
+                    showNotification(data.message, 'success');
+                    if (appState.currentView === 'dashboard') loadDashboardData();
+                    if (appState.currentView === 'logs') loadLogsData();
+                    if (appState.currentView === 'stats') loadHistoricalStats();
+                });
+        });
+    });
+
+    // --- NUEVO EVENT LISTENER para el filtro de logs ---
+    elements.logs.filter.addEventListener('change', () => {
+        loadLogsData();
+    });
+    
+    // General: Auto-refresco
+    elements.general.autoRefreshSwitch.addEventListener('change', (e) => {
+        appState.autoRefreshEnabled = e.target.checked;
+        if (appState.autoRefreshEnabled && appState.currentView === 'dashboard') {
+            startAutoRefresh();
+        } else {
+            stopAutoRefresh();
         }
-    }
-    
-    function updateSortIndicators() {
-        document.querySelectorAll('th[data-sort]').forEach(th => {
-            const span = th.querySelector('span');
-            if (th.dataset.sort === appState.sortBy) {
-                span.textContent = appState.sortOrder === 'asc' ? ' ▲' : ' ▼';
+    });
+
+    // --- FUNCIONES DE UTILIDAD ---
+    const showSpinner = () => elements.general.spinnerOverlay.classList.remove('d-none');
+    const hideSpinner = () => elements.general.spinnerOverlay.classList.add('d-none');
+
+    const showNotification = (message, type = 'info') => {
+        const toastId = `toast-${Date.now()}`;
+        const toastHTML = `
+            <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="toast-header">
+                    <strong class="me-auto text-${type}">Notificación</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+                <div class="toast-body">${message}</div>
+            </div>
+        `;
+        elements.general.notificationArea.insertAdjacentHTML('beforeend', toastHTML);
+        const toastElement = document.getElementById(toastId);
+        const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
+        toast.show();
+        toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
+    };
+
+    const showConfirmationModal = (message, onConfirm) => {
+        elements.general.confirmationModalBody.textContent = message;
+        
+        const newConfirmButton = elements.general.confirmActionButton.cloneNode(true);
+        elements.general.confirmActionButton.parentNode.replaceChild(newConfirmButton, elements.general.confirmActionButton);
+        elements.general.confirmActionButton = newConfirmButton;
+
+        elements.general.confirmActionButton.addEventListener('click', () => {
+            onConfirm();
+            elements.general.confirmationModal.hide();
+        }, { once: true });
+        
+        elements.general.confirmationModal.show();
+    };
+
+    const updateSortIndicators = () => {
+        elements.dashboard.tableHeaders.forEach(header => {
+            const span = header.querySelector('span');
+            if (header.dataset.sort === appState.pagination.sort_by) {
+                span.textContent = appState.pagination.order === 'asc' ? ' ▲' : ' ▼';
             } else {
                 span.textContent = '';
             }
         });
-    }
-
-    function showNotification(message, type = 'info') {
-        const toastContainer = document.getElementById('notification-area');
-        const toastId = `toast-${Date.now()}`;
-        const toastHTML = `
-            <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="5000">
-                <div class="toast-header bg-${type} ${type === 'info' || type === 'light' ? '' : 'text-white'}">
-                    <strong class="me-auto">${type.charAt(0).toUpperCase() + type.slice(1)}</strong>
-                    <button type="button" class="btn-close ${type === 'info' || type === 'light' ? '' : 'btn-close-white'}" data-bs-dismiss="toast" aria-label="Close"></button>
-                </div>
-                <div class="toast-body">
-                    ${message}
-                </div>
-            </div>`;
-        toastContainer.insertAdjacentHTML('beforeend', toastHTML);
-        const toastElement = document.getElementById(toastId);
-        const toast = new bootstrap.Toast(toastElement);
-        toast.show();
-        toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
-    }
-
-    function showConfirmationModal(title, body, onConfirm) {
-        confirmationModalEl.querySelector('#confirmationModalLabel').textContent = title;
-        confirmationModalEl.querySelector('#confirmationModalBody').textContent = body;
-        
-        const confirmBtn = confirmationModalEl.querySelector('#confirmActionButton');
-        // Clonar para remover listeners antiguos
-        const newConfirmBtn = confirmBtn.cloneNode(true);
-        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-
-        newConfirmBtn.addEventListener('click', () => {
-            onConfirm();
-            confirmationModal.hide();
-        });
-
-        confirmationModal.show();
-    }
-
-    // === MANEJO DE AUTO-REFRESCO ===
-    function startAutoRefresh() {
-        if (!autoRefreshInterval && appState.autoRefresh) {
-            autoRefreshInterval = setInterval(() => {
-                // Solo refresca la vista activa
-                if (!views.dashboard.classList.contains('d-none')) {
-                    fetchDataForDashboard();
-                }
-            }, REFRESH_INTERVAL_MS);
-        }
-    }
-    
-    function stopAutoRefresh() {
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
-    }
-    
-
-    // === EXPOSICIÓN DE FUNCIONES GLOBALES (para onclick) ===
-    window.app = {
-        releaseIp: (deviceId, ipAddress) => {
-            showConfirmationModal(
-                `Liberar IP ${ipAddress}`,
-                '¿Estás seguro de que quieres enviar una solicitud DHCPRELEASE para este dispositivo?',
-                async () => {
-                    try {
-                        const result = await fetchWithSpinner(`${API_BASE_URL}/devices/${deviceId}/release`, { method: 'POST' });
-                        showNotification(result.message, 'success');
-                        fetchDevices();
-                        fetchStats();
-                    } catch (error) {
-                        console.error("Error al liberar la IP.");
-                    }
-                }
-            );
-        },
-        toggleExclusion: async (deviceId, isExcluded) => {
-            const action = isExcluded ? "excluir" : "incluir";
-            try {
-                const result = await fetchWithSpinner(`${API_BASE_URL}/devices/${deviceId}/exclude`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ is_excluded: isExcluded }),
-                });
-                showNotification(result.message, 'success');
-                fetchDevices();
-            } catch (error) {
-                console.error(`Error al ${action} el dispositivo.`);
-            }
-        }
     };
 
-    // Iniciar la aplicación
+    const startAutoRefresh = () => {
+        if (appState.autoRefreshInterval) clearInterval(appState.autoRefreshInterval);
+        appState.autoRefreshInterval = setInterval(loadDashboardData, 10000); // 10 segundos
+    };
+
+    const stopAutoRefresh = () => {
+        clearInterval(appState.autoRefreshInterval);
+        appState.autoRefreshInterval = null;
+    };
+    
+    // --- INICIALIZACIÓN ---
+    const init = () => {
+        loadInitialConfig();
+        switchView('dashboard');
+        updateSortIndicators();
+    };
+
     init();
 });
