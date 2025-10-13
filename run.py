@@ -1,5 +1,5 @@
 from app import create_app, db
-from app.models import Device, ApplicationConfig, LogEntry
+from app.models import Device, ApplicationConfig, LogEntry, User
 
 # Creamos la instancia de la aplicación
 app = create_app()
@@ -15,10 +15,12 @@ def make_shell_context():
         'db': db,
         'Device': Device,
         'ApplicationConfig': ApplicationConfig,
-        'LogEntry': LogEntry
+        'LogEntry': LogEntry,
+        'User': User
     }
 
 if __name__ == '__main__':
     # ADVERTENCIA: No uses app.run() en producción.
     # Usa un servidor WSGI como Gunicorn o Waitress.
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # El modo debug se ha desactivado por seguridad.
+    app.run(host='0.0.0.0', port=5001, debug=False)
