@@ -168,40 +168,26 @@
         <!-- Vista de Configuración -->
         <div id="config-view" class="d-none">
             <h2 class="mb-3">Configuración</h2>
-            <div class="card">
-                <div class="card-body">
-                    <form id="config-form">
-                        <div class="mb-4 p-3 border rounded bg-warning-subtle">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" role="switch" id="dry_run_enabled" name="dry_run_enabled">
-                                <label class="form-check-label" for="dry_run_enabled">
-                                    <strong>Activar Modo de Simulación (Dry Run)</strong>
-                                    <div class="form-text mt-1">Cuando está activado, la aplicación registrará las acciones que tomaría (como liberar una IP) pero no las ejecutará realmente. Es seguro dejarlo activado para observar el comportamiento del sistema.</div>
-                                </label>
-                            </div>
+            <form id="config-form">
+                <!-- MODO DRY RUN -->
+                <div class="card mb-4">
+                    <div class="card-body bg-warning-subtle">
+                        <div class="form-check form-switch d-flex align-items-center p-0">
+                            <label class="form-check-label flex-grow-1" for="dry_run_enabled">
+                                <strong>Activar Modo de Simulación (Dry Run)</strong>
+                                <div class="form-text mt-1">Cuando está activado, la aplicación registrará las acciones que tomaría (como liberar una IP) pero no las ejecutará realmente.</div>
+                            </label>
+                            <input class="form-check-input ms-3" type="checkbox" role="switch" id="dry_run_enabled" name="dry_run_enabled" style="transform: scale(1.5);">
                         </div>
+                    </div>
+                </div>
 
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="discovery_method" class="form-label">Método de Descubrimiento</label>
-                                <select class="form-select" id="discovery_method" name="discovery_method">
-                                    <option value="nmap">Nmap (Activo)</option>
-                                    <option value="sniffer">Sniffer DHCP (Pasivo)</option>
-                                    <option value="both">Ambos</option>
-                                </select>
-                                <div class="form-text">Elige cómo se descubren los dispositivos en la red.</div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="release_policy" class="form-label">Política de Liberación Automática</label>
-                                <select class="form-select" id="release_policy" name="release_policy">
-                                    <option value="force">Forzar liberación siempre</option>
-                                    <option value="ping_before_release">Liberar solo si no responde al ping</option>
-                                </select>
-                                <div class="form-text">Define una condición extra antes de una liberación automática.</div>
-                            </div>
-                        </div>
-                        <hr>
-
+                <!-- GRUPO DE CONFIGURACIÓN DE RED -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        Configuración de Red
+                    </div>
+                    <div class="card-body">
                         <div class="mb-3">
                             <label for="scan_subnet" class="form-label">Subred a Escanear (ej: 192.168.1.0/24)</label>
                             <input type="text" class="form-control" id="scan_subnet" name="scan_subnet" required>
@@ -214,11 +200,15 @@
                             <label for="network_interface" class="form-label">Interfaz de Red</label>
                             <input type="text" class="form-control" id="network_interface" name="network_interface" required>
                         </div>
-                        <div class="mb-3">
-                            <label for="scan_interval_seconds" class="form-label">Intervalo de Escaneo (segundos)</label>
-                            <input type="number" class="form-control" id="scan_interval_seconds" name="scan_interval_seconds" min="10" required>
-                            <div class="form-text">Frecuencia con la que el worker buscará nuevos dispositivos y aplicará reglas. Mínimo 10 segundos.</div>
-                        </div>
+                    </div>
+                </div>
+
+                <!-- GRUPO DE REGLAS DE LIBERACIÓN -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        Reglas de Liberación Automática
+                    </div>
+                    <div class="card-body">
                         <div class="mb-3">
                             <label for="auto_release_threshold_hours" class="form-label">Liberar IPs inactivas después de (horas)</label>
                             <input type="number" class="form-control" id="auto_release_threshold_hours" name="auto_release_threshold_hours" min="0" required>
@@ -228,25 +218,61 @@
                             <label for="mac_auto_release_list" class="form-label">Lista de MACs para Liberación Automática</label>
                             <textarea class="form-control" id="mac_auto_release_list" name="mac_auto_release_list" rows="5"></textarea>
                             <div class="form-text">
-                                Introduce una MAC o prefijo de MAC por línea (ej: 00:1A:2B:3C:4D:5E o 00:1A:2B). Los dispositivos que coincidan serán liberados en cada ciclo, sin importar su estado de actividad.
+                                Introduce una MAC o prefijo de MAC por línea (ej: 00:1A:2B...). Los dispositivos que coincidan serán liberados en cada ciclo.
                             </div>
                         </div>
-                        <button type="submit" class="btn btn-primary w-100">Guardar Cambios</button>
-                    </form>
-                    <div id="config-status" class="mt-3"></div>
-
-                    <hr class="my-4">
-                    <div>
-                        <h5 class="text-danger">Zona de Peligro</h5>
-                        <p class="form-text">
-                            Esta acción eliminará permanentemente todo el historial de dispositivos descubiertos, los registros de logs y las estadísticas históricas. La configuración de la aplicación y el usuario administrador no se verán afectados.
-                        </p>
-                        <button type="button" class="btn btn-danger w-100" id="clear-database-btn">Limpiar Base de Datos (Dispositivos, Logs y Estadísticas)</button>
+                        <div class="mb-3">
+                            <label for="release_policy" class="form-label">Política de Liberación Segura</label>
+                            <select class="form-select" id="release_policy" name="release_policy">
+                                <option value="force">Forzar liberación siempre</option>
+                                <option value="ping_before_release">Liberar solo si no responde al ping</option>
+                            </select>
+                            <div class="form-text">Añade una comprobación extra antes de una liberación automática.</div>
+                        </div>
                     </div>
+                </div>
 
+                <!-- GRUPO DE AJUSTES DEL WORKER -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        Ajustes del Worker
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="discovery_method" class="form-label">Método de Descubrimiento</label>
+                            <select class="form-select" id="discovery_method" name="discovery_method">
+                                <option value="nmap">Nmap (Activo)</option>
+                                <option value="sniffer">Sniffer DHCP (Pasivo)</option>
+                                <option value="both">Ambos</option>
+                            </select>
+                            <div class="form-text">Elige cómo se descubren los dispositivos en la red.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="scan_interval_seconds" class="form-label">Intervalo de Escaneo (segundos)</label>
+                            <input type="number" class="form-control" id="scan_interval_seconds" name="scan_interval_seconds" min="10" required>
+                            <div class="form-text">Frecuencia con la que el worker buscará nuevos dispositivos y aplicará reglas. Mínimo 10 segundos.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100">Guardar Cambios</button>
+            </form>
+            <div id="config-status" class="mt-3"></div>
+
+            <!-- ZONA DE PELIGRO -->
+            <div class="card mt-5 border-danger">
+                <div class="card-header bg-danger text-white">
+                    Zona de Peligro
+                </div>
+                <div class="card-body">
+                    <p class="form-text">
+                        Esta acción eliminará permanentemente todo el historial de dispositivos descubiertos, los registros de logs y las estadísticas históricas. La configuración de la aplicación y el usuario administrador no se verán afectados.
+                    </p>
+                    <button type="button" class="btn btn-danger w-100" id="clear-database-btn">Limpiar Base de Datos (Dispositivos, Logs y Estadísticas)</button>
                 </div>
             </div>
         </div>
+
 
         <!-- Vista de Logs -->
         <div id="logs-view" class="d-none">
@@ -291,6 +317,69 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                     <button type="button" class="btn btn-danger" id="confirmActionButton">Confirmar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- [NUEVO] PANEL LATERAL (OFFCANVAS) PARA DETALLES DEL DISPOSITIVO -->
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="deviceDetailOffcanvas" aria-labelledby="deviceDetailOffcanvasLabel">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="deviceDetailOffcanvasLabel">Detalles del Dispositivo</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        </div>
+        <div class="offcanvas-body">
+            <div id="offcanvas-content-placeholder">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Cargando...</span>
+                    </div>
+                </div>
+            </div>
+            <div id="offcanvas-content-real" class="d-none">
+                
+                <div class="mb-3">
+                    <h4 id="detail-ip-address" class="mb-0"></h4>
+                    <small class="text-muted" id="detail-mac-address"></small>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <p class="card-text">
+                            <strong>Fabricante:</strong> <span id="detail-vendor"></span><br>
+                            <strong>Estado:</strong> <span id="detail-status" class="badge"></span>
+                        </p>
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-header">
+                        Actividad
+                    </div>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item"><strong>Visto por última vez:</strong> <span id="detail-last-seen"></span></li>
+                        <li class="list-group-item"><strong>Visto por primera vez:</strong> <span id="detail-first-seen"></span></li>
+                        <li class="list-group-item"><strong>Descubierto por:</strong> <span id="detail-last-seen-by" class="badge"></span></li>
+                    </ul>
+                </div>
+                
+                <div class="card mb-3">
+                    <div class="card-header">
+                        Lease DHCP
+                    </div>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item"><strong>Inicio del Lease:</strong> <span id="detail-lease-start"></span></li>
+                        <li class="list-group-item"><strong>Tiempo restante:</strong> <span id="detail-lease-remaining"></span></li>
+                    </ul>
+                </div>
+
+                <div class="mt-4">
+                    <h5>Acciones</h5>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-primary" type="button" id="detail-ping-btn">Hacer Ping</button>
+                        <button class="btn btn-warning" type="button" id="detail-exclude-btn">Excluir de Automatización</button>
+                        <button class="btn btn-danger" type="button" id="detail-release-btn">Liberar IP</button>
+                    </div>
                 </div>
             </div>
         </div>
