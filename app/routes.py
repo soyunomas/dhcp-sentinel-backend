@@ -8,6 +8,7 @@ from app.models import Device, ApplicationConfig, LogEntry, HistoricalStat
 from app.scanner.core import perform_dhcp_release, log_event
 from sqlalchemy import or_
 from sqlalchemy.exc import OperationalError 
+import ipaddress
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -153,7 +154,14 @@ def update_config():
     if not data:
         return jsonify({'error': 'No input data provided'}), 400
     settings = ApplicationConfig.get_settings()
-    if 'scan_subnet' in data: settings.scan_subnet = data['scan_subnet']
+
+    if 'scan_subnet' in data:
+        try:
+            ipaddress.ip_network(data['scan_subnet'], strict=False)
+            settings.scan_subnet = data['scan_subnet']
+        except ValueError:
+            return jsonify({'error': f"Formato de subred inválido: '{data['scan_subnet']}'. Use notación CIDR, ej: 192.168.1.0/24."}), 400
+
     if 'dhcp_server_ip' in data: settings.dhcp_server_ip = data['dhcp_server_ip']
     if 'network_interface' in data: settings.network_interface = data['network_interface']
     if 'auto_release_threshold_hours' in data: settings.auto_release_threshold_hours = data['auto_release_threshold_hours']
@@ -202,11 +210,9 @@ def release_device_ip(device_id):
             device.status = 'released'
             log_event(f"Liberada manualmente la IP {device.ip_address} (MAC: {device.mac_address})", 'INFO')
             
-            # --- BLOQUE CORREGIDO: Creación robusta de la entrada de estadísticas ---
             today = date_obj.today()
             stat_entry = db.session.get(HistoricalStat, today)
             if not stat_entry:
-                # Si la entrada no existe, la creamos con todos los valores inicializados a 0
                 stat_entry = HistoricalStat(
                     date=today,
                     releases_manual=0,
@@ -218,7 +224,6 @@ def release_device_ip(device_id):
                 db.session.add(stat_entry)
             
             stat_entry.releases_manual = (stat_entry.releases_manual or 0) + 1
-            # --- FIN DE LA CORRECCIÓN ---
             
             db.session.commit()
             message = f'Solicitud de liberación para {device.ip_address} enviada correctamente.'
@@ -238,16 +243,43 @@ def toggle_device_exclusion(device_id):
     data = request.get_json()
     if data is None or 'is_excluded' not in data or not isinstance(data['is_excluded'], bool):
         return jsonify({'error': 'Cuerpo de la solicitud inválido. Se esperaba {"is_excluded": boolean}'}), 400
+    
     new_state = data['is_excluded']
     device.is_excluded = new_state
-    db.session.commit()
+    
     action = "marcado como excluido" if new_state else "desmarcado como excluido"
     log_event(f"Dispositivo {device.mac_address} ({device.ip_address}) {action}.", 'INFO')
+    
+    db.session.commit()
+    
     return jsonify({'message': f'Dispositivo {action} correctamente.', 'device': device.to_dict()})
 
 @bp.route('/logs', methods=['GET'])
 def get_logs():
-    limit = request.args.get('limit', 100, type=int)
-    logs = LogEntry.query.order_by(LogEntry.timestamp.desc()).limit(limit).all()
+    limit = request.args.get('limit', 200, type=int)
+    event_type = request.args.get('event_type', 'all') # <-- NUEVO PARÁMETRO
+
+    query = LogEntry.query
+
+    # --- INICIO DE MODIFICACIÓN: Lógica de filtrado ---
+    if event_type == 'user_action':
+        query = query.filter(or_(
+            LogEntry.message.ilike('%Liberada manualmente%'),
+            LogEntry.message.ilike('%marcado como excluido%'),
+            LogEntry.message.ilike('%desmarcado como excluido%'),
+            LogEntry.message.ilike('%ha limpiado la base de datos%')
+        ))
+    elif event_type == 'auto_release':
+        query = query.filter(LogEntry.message.ilike('%liberada automáticamente%'))
+    elif event_type == 'discovery':
+        query = query.filter(LogEntry.message.ilike('%Nuevo dispositivo descubierto%'))
+    elif event_type == 'system_error':
+        query = query.filter(LogEntry.level == 'ERROR')
+    elif event_type == 'dry_run':
+        query = query.filter(LogEntry.message.ilike('%[DRY RUN]%'))
+    # Si event_type es 'all' o cualquier otro valor, no se aplica ningún filtro de mensaje.
+    # --- FIN DE MODIFICACIÓN ---
+
+    logs = query.order_by(LogEntry.timestamp.desc()).limit(limit).all()
     logs_list = [log.to_dict() for log in logs]
     return jsonify(logs_list)

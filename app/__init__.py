@@ -1,17 +1,17 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from flask_login import LoginManager # <-- NUEVA IMPORTACIÓN
-from flask_bcrypt import Bcrypt # <-- NUEVA IMPORTACIÓN
+from flask_login import LoginManager
+from flask_bcrypt import Bcrypt
+from flask_wtf.csrf import CSRFProtect # <-- NUEVA IMPORTACIÓN
 from config import Config
 
 db = SQLAlchemy()
 migrate = Migrate()
-login_manager = LoginManager() # <-- NUEVA INSTANCIA
-bcrypt = Bcrypt() # <-- NUEVA INSTANCIA
+login_manager = LoginManager()
+bcrypt = Bcrypt()
+csrf = CSRFProtect() # <-- NUEVA INSTANCIA
 
-# Le decimos a Flask-Login cuál es la vista para iniciar sesión.
-# Si un usuario no autenticado intenta acceder a una ruta protegida, será redirigido aquí.
 login_manager.login_view = 'main.login' 
 
 def create_app(config_class=Config):
@@ -23,8 +23,9 @@ def create_app(config_class=Config):
 
     db.init_app(app)
     migrate.init_app(app, db)
-    login_manager.init_app(app) # <-- INICIALIZAR LOGIN MANAGER
-    bcrypt.init_app(app) # <-- INICIALIZAR BCRYPT
+    login_manager.init_app(app)
+    bcrypt.init_app(app)
+    csrf.init_app(app) # <-- INICIALIZAR CSRF PROTECT
 
     # Registrar el blueprint de las rutas principales (como '/')
     from app.main_routes import main_bp
@@ -38,7 +39,6 @@ def create_app(config_class=Config):
 
 from app import models
 
-# Esta función es requerida por Flask-Login para cargar un usuario desde la sesión.
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(models.User, int(user_id))
