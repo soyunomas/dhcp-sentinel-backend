@@ -142,6 +142,15 @@ def get_devices():
     }
     return jsonify(response)
 
+# --- [NUEVO] ---
+@bp.route('/devices/<int:device_id>', methods=['GET'])
+def get_device_detail(device_id):
+    """Endpoint para obtener los detalles de un único dispositivo."""
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({'error': 'Dispositivo no encontrado'}), 404
+    return jsonify(device.to_dict())
+# --- [FIN NUEVO] ---
 
 @bp.route('/config', methods=['GET'])
 def get_config():
