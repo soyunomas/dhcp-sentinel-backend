@@ -1,32 +1,49 @@
 #!/bin/bash
 
-# --- Script para empaquetar el proyecto DHCP Sentinel para despliegue ---
-
-# Nombre del directorio del proyecto (el directorio actual)
+# --- CONFIGURACIÓN ---
+# Nombre del proyecto, usado para el nombre del archivo ZIP.
 PROJECT_NAME="dhcp-sentinel-backend"
-# Nombre del archivo de salida
-OUTPUT_FILE="dhcp-sentinel-release.tar.gz"
+# Genera el nombre del archivo de salida con la fecha actual (ej: dhcp-sentinel-backend_2025-10-13.zip)
+OUTPUT_FILE="${PROJECT_NAME}_$(date +'%Y-%m-%d').zip"
 
-echo "Creando paquete de despliegue: ${OUTPUT_FILE}..."
+# --- INICIO DEL SCRIPT ---
 
-# Usamos 'tar' para crear un archivo comprimido (.tar.gz)
-# --exclude-vcs: Excluye automáticamente carpetas de control de versiones como .git
-# --exclude: Excluye patrones específicos que no queremos en el paquete final.
+echo "==============================================="
+echo " Empaquetando el proyecto DHCP Sentinel"
+echo "==============================================="
+echo
 
-tar \
-  --exclude-vcs \
-  --exclude='venv' \
-  --exclude='app.db' \
-  --exclude='__pycache__' \
-  --exclude='*.pyc' \
-  --exclude='instance' \
-  --exclude='*.tar.gz' \
-  --exclude='package_project.sh' \
-  -czvf "${OUTPUT_FILE}" \
-  .
+# Comprobar si ya existe un archivo con el mismo nombre y borrarlo.
+if [ -f "$OUTPUT_FILE" ]; then
+    echo "-> Se encontró un archivo de paquete antiguo. Eliminando '$OUTPUT_FILE'..."
+    rm "$OUTPUT_FILE"
+fi
 
-echo "-----------------------------------------------------"
-echo "¡Paquete creado con éxito!"
-echo "Archivo guardado como: ${OUTPUT_FILE}"
-echo "Este archivo contiene solo el código fuente necesario para el despliegue."
-echo "-----------------------------------------------------"
+echo "-> El paquete se guardará como: $OUTPUT_FILE"
+echo
+
+echo "-> Se excluirán los siguientes elementos:"
+echo "   - El entorno virtual (venv/)"
+echo "   - La base de datos (app.db)"
+echo "   - Archivos de caché de Python (__pycache__/ y *.pyc)"
+echo "   - El propio script de empaquetado"
+echo "   - Cualquier otro archivo .zip"
+echo
+
+# El comando ZIP:
+# -r : recursivo, para incluir todos los subdirectorios.
+# "$OUTPUT_FILE" : el nombre de nuestro archivo de salida.
+# . : el directorio actual (la raíz del proyecto).
+# -x : para excluir los patrones que siguen.
+zip -r "$OUTPUT_FILE" . \
+    -x "venv/*" \
+    -x "app.db" \
+    -x "*/__pycache__/*" \
+    -x "*.pyc" \
+    -x "*.zip"
+
+echo
+echo "==============================================="
+echo "¡Proceso completado!"
+echo "El archivo '$OUTPUT_FILE' ha sido creado en el directorio actual."
+echo "==============================================="

@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from datetime import datetime, timedelta, UTC, date as date_obj
 from app import db
 from app.models import Device, ApplicationConfig, LogEntry, HistoricalStat
-from app.scanner.core import perform_dhcp_release, log_event
+from app.scanner.core import perform_dhcp_release, log_event, is_host_alive
 from sqlalchemy import or_
 from sqlalchemy.exc import OperationalError 
 import ipaddress
@@ -117,7 +117,7 @@ def get_devices():
         search_pattern = f"%{search_term}%"
         query = query.filter(or_(Device.ip_address.ilike(search_pattern), Device.mac_address.ilike(search_pattern), Device.vendor.ilike(search_pattern)))
 
-    allowed_sort_fields = ['ip_address', 'mac_address', 'vendor', 'first_seen', 'last_seen', 'status', 'is_excluded']
+    allowed_sort_fields = ['ip_address', 'mac_address', 'vendor', 'first_seen', 'last_seen', 'status', 'is_excluded', 'lease_start_time', 'last_seen_by']
     if sort_by not in allowed_sort_fields:
         sort_by = 'last_seen'
     sort_column = getattr(Device, sort_by)
@@ -153,21 +153,83 @@ def update_config():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No input data provided'}), 400
+    
     settings = ApplicationConfig.get_settings()
+    old_values = settings.to_dict() # Captura los valores antiguos
+    changes_detected = []
+
+    # --- Procesar y comparar cada campo ---
 
     if 'scan_subnet' in data:
+        new_value = data['scan_subnet']
         try:
-            ipaddress.ip_network(data['scan_subnet'], strict=False)
-            settings.scan_subnet = data['scan_subnet']
+            ipaddress.ip_network(new_value, strict=False)
+            if new_value != old_values['scan_subnet']:
+                changes_detected.append(f"Subred de escaneo cambiada de '{old_values['scan_subnet']}' a '{new_value}'")
+            settings.scan_subnet = new_value
         except ValueError:
-            return jsonify({'error': f"Formato de subred inválido: '{data['scan_subnet']}'. Use notación CIDR, ej: 192.168.1.0/24."}), 400
+            return jsonify({'error': f"Formato de subred inválido: '{new_value}'. Use notación CIDR, ej: 192.168.1.0/24."}), 400
 
-    if 'dhcp_server_ip' in data: settings.dhcp_server_ip = data['dhcp_server_ip']
-    if 'network_interface' in data: settings.network_interface = data['network_interface']
-    if 'auto_release_threshold_hours' in data: settings.auto_release_threshold_hours = data['auto_release_threshold_hours']
-    if 'mac_auto_release_list' in data: settings.mac_auto_release_list = data['mac_auto_release_list']
-    if 'dry_run_enabled' in data: settings.dry_run_enabled = data['dry_run_enabled']
+    if 'dhcp_server_ip' in data:
+        new_value = data['dhcp_server_ip']
+        if new_value != old_values['dhcp_server_ip']:
+            changes_detected.append(f"IP del servidor DHCP cambiada de '{old_values['dhcp_server_ip']}' a '{new_value}'")
+        settings.dhcp_server_ip = new_value
+
+    if 'network_interface' in data:
+        new_value = data['network_interface']
+        if new_value != old_values['network_interface']:
+            changes_detected.append(f"Interfaz de red cambiada de '{old_values['network_interface']}' a '{new_value}'")
+        settings.network_interface = new_value
+
+    if 'auto_release_threshold_hours' in data:
+        new_value = data['auto_release_threshold_hours']
+        if new_value != old_values['auto_release_threshold_hours']:
+            changes_detected.append(f"Umbral de liberación por inactividad cambiado de '{old_values['auto_release_threshold_hours']}' a '{new_value}' horas")
+        settings.auto_release_threshold_hours = new_value
+
+    if 'mac_auto_release_list' in data:
+        new_value = data['mac_auto_release_list']
+        if new_value != old_values['mac_auto_release_list']:
+            changes_detected.append("Lista de MACs para auto-liberación modificada") # Mensaje genérico para campos largos
+        settings.mac_auto_release_list = new_value
+
+    if 'dry_run_enabled' in data:
+        new_value = data['dry_run_enabled']
+        if new_value is not old_values['dry_run_enabled']:
+            estado = "activado" if new_value else "desactivado"
+            changes_detected.append(f"Modo de simulación (Dry Run) {estado}")
+        settings.dry_run_enabled = new_value
+
+    if 'discovery_method' in data:
+        new_value = data['discovery_method']
+        if new_value != old_values['discovery_method']:
+            changes_detected.append(f"Método de descubrimiento cambiado de '{old_values['discovery_method']}' a '{new_value}'")
+        settings.discovery_method = new_value
+
+    if 'release_policy' in data:
+        new_value = data['release_policy']
+        if new_value != old_values['release_policy']:
+            changes_detected.append(f"Política de liberación cambiada de '{old_values['release_policy']}' a '{new_value}'")
+        settings.release_policy = new_value
     
+    if 'scan_interval_seconds' in data:
+        new_value = data['scan_interval_seconds']
+        try:
+            interval = int(new_value)
+            if interval < 10:
+                return jsonify({'error': 'El intervalo de escaneo no puede ser menor a 10 segundos.'}), 400
+            if interval != old_values['scan_interval_seconds']:
+                changes_detected.append(f"Intervalo de escaneo cambiado de '{old_values['scan_interval_seconds']}' a '{interval}' segundos")
+            settings.scan_interval_seconds = interval
+        except (ValueError, TypeError):
+            return jsonify({'error': 'El intervalo de escaneo debe ser un número entero.'}), 400
+    
+    # --- Registrar los cambios si existen ---
+    if changes_detected:
+        log_message = f"Configuración actualizada por '{current_user.username}': {'; '.join(changes_detected)}."
+        log_event(log_message, 'INFO')
+
     db.session.commit()
     return jsonify({'message': 'Configuración actualizada correctamente', 'config': settings.to_dict()})
 
@@ -208,7 +270,7 @@ def release_device_ip(device_id):
     if success:
         if not was_dry_run:
             device.status = 'released'
-            log_event(f"Liberada manualmente la IP {device.ip_address} (MAC: {device.mac_address})", 'INFO')
+            log_event(f"Liberada manualmente la IP {device.ip_address} (MAC: {device.mac_address}) por '{current_user.username}'.", 'INFO')
             
             today = date_obj.today()
             stat_entry = db.session.get(HistoricalStat, today)
@@ -236,6 +298,19 @@ def release_device_ip(device_id):
         db.session.commit()
         return jsonify({'error': 'Falló el envío del paquete DHCPRELEASE.'}), 500
 
+@bp.route('/devices/<int:device_id>/ping', methods=['POST'])
+def ping_device(device_id):
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({'error': 'Dispositivo no encontrado'}), 404
+    
+    is_online = is_host_alive(device.ip_address)
+    
+    if is_online:
+        return jsonify({'status': 'online', 'ip_address': device.ip_address})
+    else:
+        return jsonify({'status': 'offline', 'ip_address': device.ip_address})
+
 @bp.route('/devices/<int:device_id>/exclude', methods=['PUT'])
 def toggle_device_exclusion(device_id):
     device = db.session.get(Device, device_id)
@@ -248,7 +323,7 @@ def toggle_device_exclusion(device_id):
     device.is_excluded = new_state
     
     action = "marcado como excluido" if new_state else "desmarcado como excluido"
-    log_event(f"Dispositivo {device.mac_address} ({device.ip_address}) {action}.", 'INFO')
+    log_event(f"Dispositivo {device.mac_address} ({device.ip_address}) {action} por '{current_user.username}'.", 'INFO')
     
     db.session.commit()
     
@@ -257,17 +332,17 @@ def toggle_device_exclusion(device_id):
 @bp.route('/logs', methods=['GET'])
 def get_logs():
     limit = request.args.get('limit', 200, type=int)
-    event_type = request.args.get('event_type', 'all') # <-- NUEVO PARÁMETRO
+    event_type = request.args.get('event_type', 'all') 
 
     query = LogEntry.query
 
-    # --- INICIO DE MODIFICACIÓN: Lógica de filtrado ---
     if event_type == 'user_action':
         query = query.filter(or_(
             LogEntry.message.ilike('%Liberada manualmente%'),
             LogEntry.message.ilike('%marcado como excluido%'),
             LogEntry.message.ilike('%desmarcado como excluido%'),
-            LogEntry.message.ilike('%ha limpiado la base de datos%')
+            LogEntry.message.ilike('%ha limpiado la base de datos%'),
+            LogEntry.message.ilike('%Configuración actualizada por%')
         ))
     elif event_type == 'auto_release':
         query = query.filter(LogEntry.message.ilike('%liberada automáticamente%'))
@@ -277,8 +352,6 @@ def get_logs():
         query = query.filter(LogEntry.level == 'ERROR')
     elif event_type == 'dry_run':
         query = query.filter(LogEntry.message.ilike('%[DRY RUN]%'))
-    # Si event_type es 'all' o cualquier otro valor, no se aplica ningún filtro de mensaje.
-    # --- FIN DE MODIFICACIÓN ---
 
     logs = query.order_by(LogEntry.timestamp.desc()).limit(limit).all()
     logs_list = [log.to_dict() for log in logs]

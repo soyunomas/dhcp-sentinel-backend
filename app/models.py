@@ -36,6 +36,13 @@ class Device(db.Model):
 
     status = db.Column(db.String(50), default='active', nullable=False)
     is_excluded = db.Column(db.Boolean, default=False, nullable=False)
+    
+    lease_start_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    lease_duration_seconds = db.Column(db.Integer, nullable=True)
+
+    # --- NUEVO CAMPO ---
+    last_seen_by = db.Column(db.String(10), nullable=True, default='nmap')
+
 
     def to_dict(self):
         # Función para formatear fechas de manera segura, asegurando el formato UTC con 'Z'
@@ -53,7 +60,10 @@ class Device(db.Model):
             'first_seen': format_datetime_as_utc(self.first_seen),
             'last_seen': format_datetime_as_utc(self.last_seen),
             'status': self.status,
-            'is_excluded': self.is_excluded
+            'is_excluded': self.is_excluded,
+            'lease_start_time': format_datetime_as_utc(self.lease_start_time),
+            'lease_duration_seconds': self.lease_duration_seconds,
+            'last_seen_by': self.last_seen_by # <-- Añadido
         }
 
 class ApplicationConfig(db.Model):
@@ -65,6 +75,12 @@ class ApplicationConfig(db.Model):
     auto_release_threshold_hours = db.Column(db.Integer, default=24)
     mac_auto_release_list = db.Column(db.Text, default='')
     dry_run_enabled = db.Column(db.Boolean, default=True, nullable=False)
+
+    discovery_method = db.Column(db.String(50), nullable=False, default='nmap', server_default='nmap')
+    release_policy = db.Column(db.String(50), nullable=False, default='force', server_default='force')
+
+    scan_interval_seconds = db.Column(db.Integer, nullable=False, default=60, server_default='60')
+
 
     @staticmethod
     def get_settings():
@@ -83,7 +99,10 @@ class ApplicationConfig(db.Model):
             'network_interface': self.network_interface,
             'auto_release_threshold_hours': self.auto_release_threshold_hours,
             'mac_auto_release_list': self.mac_auto_release_list,
-            'dry_run_enabled': self.dry_run_enabled
+            'dry_run_enabled': self.dry_run_enabled,
+            'discovery_method': self.discovery_method,
+            'release_policy': self.release_policy,
+            'scan_interval_seconds': self.scan_interval_seconds
         }
 
 class LogEntry(db.Model):
@@ -101,18 +120,12 @@ class LogEntry(db.Model):
             'message': self.message
         }
 
-# --- NUEVO MODELO PARA ESTADÍSTICAS HISTÓRICAS ---
 class HistoricalStat(db.Model):
     __tablename__ = 'historical_stat'
-    # La fecha es la clave primaria para asegurar una entrada por día.
     date = db.Column(db.Date, primary_key=True)
-    
-    # Contadores de liberaciones
     releases_manual = db.Column(db.Integer, default=0, nullable=False)
     releases_inactivity = db.Column(db.Integer, default=0, nullable=False)
     releases_mac_list = db.Column(db.Integer, default=0, nullable=False)
-
-    # Snapshots de estado de la red
     total_devices_snapshot = db.Column(db.Integer, default=0, nullable=False)
     active_devices_peak = db.Column(db.Integer, default=0, nullable=False)
 

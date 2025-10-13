@@ -1,3 +1,5 @@
+/* app/static/css/style.css */
+
 /* Pequeños ajustes sobre Bootstrap */
 
 .sortable {
@@ -27,4 +29,11 @@
 #spinner-overlay .spinner-border {
     width: 3rem;
     height: 3rem;
+}
+
+/* === [NUEVO] ESTILO PARA LA CELDA DE ACCIONES === */
+/* Evita que los botones se dividan en varias líneas y le da un ancho mínimo. */
+.actions-cell {
+    white-space: nowrap;
+    width: 1%; /* Truco para que la columna ocupe solo el espacio necesario para su contenido */
 }

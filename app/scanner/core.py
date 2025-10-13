@@ -2,6 +2,7 @@
 
 import nmap
 import sys
+import subprocess
 from scapy.all import *
 from datetime import datetime, UTC 
 
@@ -20,6 +21,27 @@ def log_event(message, level='INFO'):
     entry = LogEntry(message=message, level=level)
     db.session.add(entry)
     print(f"[{level}] {message}")
+
+def is_host_alive(ip_address):
+    """
+    Comprueba si un host responde a un ping.
+    Usa ping -c 1 -W 1 para enviar un solo paquete y esperar 1 segundo.
+    Devuelve True si el host responde, False en caso contrario.
+    """
+    try:
+        # El comando de ping varía ligeramente entre sistemas operativos.
+        # Este formato es para Linux/macOS.
+        command = ['ping', '-c', '1', '-W', '1', ip_address]
+        
+        # Ejecutamos el comando sin mostrar su salida en la consola.
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # El código de retorno 0 indica éxito.
+        return result.returncode == 0
+    except Exception as e:
+        print(f"[ERROR] Excepción al ejecutar ping a {ip_address}: {e}")
+        return False
+
 
 def discover_hosts(network_range):
     """
@@ -73,24 +95,24 @@ def sync_devices_db(discovered_hosts):
             device = all_db_devices_map.get(mac)
             
             if device:
-                # Dispositivo existente: solo actualizamos last_seen y IP
+                # Dispositivo existente: actualizamos last_seen, IP y método de descubrimiento
                 device.ip_address = ip
                 device.last_seen = current_time
-                if device.status != 'active':
-                    device.status = 'active'
+                device.status = 'active'
+                device.last_seen_by = 'nmap' # <-- ACTUALIZADO
             else:
-                # --- BLOQUE CORREGIDO: Nuevo dispositivo ---
-                # Ahora establecemos explícitamente first_seen y last_seen
+                # Nuevo dispositivo
                 new_device = Device(
                     ip_address=ip,
                     mac_address=mac,
                     vendor=vendor,
-                    first_seen=current_time, # <-- Añadido
-                    last_seen=current_time,  # <-- Añadido
-                    status='active'
+                    first_seen=current_time,
+                    last_seen=current_time,
+                    status='active',
+                    last_seen_by='nmap' # <-- ACTUALIZADO
                 )
                 db.session.add(new_device)
-                log_event(f"Nuevo dispositivo descubierto: IP {ip}, MAC {mac}")
+                log_event(f"Nuevo dispositivo descubierto (Nmap): IP {ip}, MAC {mac}")
         
         db.session.commit()
         print("[OK] Sincronización de la base de datos completada.")

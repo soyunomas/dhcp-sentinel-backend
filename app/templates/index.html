@@ -120,9 +120,11 @@
                             <th scope="col" data-sort="mac_address" class="sortable">MAC <span></span></th>
                             <th scope="col" data-sort="vendor" class="sortable">Fabricante <span></span></th>
                             <th scope="col" data-sort="last_seen" class="sortable">Visto por Última Vez <span></span></th>
+                            <th scope="col" data-sort="lease_start_time" class="sortable">Lease Restante <span></span></th>
                             <th scope="col" data-sort="status" class="sortable">Estado <span></span></th>
+                            <th scope="col" data-sort="last_seen_by" class="sortable">Descubierto Por <span></span></th>
                             <th scope="col" data-sort="is_excluded" class="sortable">Excluido <span></span></th>
-                            <th scope="col">Acciones</th>
+                            <th scope="col" class="actions-cell">Acciones</th>
                         </tr>
                     </thead>
                     <tbody id="devices-table-body">
@@ -179,6 +181,27 @@
                             </div>
                         </div>
 
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="discovery_method" class="form-label">Método de Descubrimiento</label>
+                                <select class="form-select" id="discovery_method" name="discovery_method">
+                                    <option value="nmap">Nmap (Activo)</option>
+                                    <option value="sniffer">Sniffer DHCP (Pasivo)</option>
+                                    <option value="both">Ambos</option>
+                                </select>
+                                <div class="form-text">Elige cómo se descubren los dispositivos en la red.</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="release_policy" class="form-label">Política de Liberación Automática</label>
+                                <select class="form-select" id="release_policy" name="release_policy">
+                                    <option value="force">Forzar liberación siempre</option>
+                                    <option value="ping_before_release">Liberar solo si no responde al ping</option>
+                                </select>
+                                <div class="form-text">Define una condición extra antes de una liberación automática.</div>
+                            </div>
+                        </div>
+                        <hr>
+
                         <div class="mb-3">
                             <label for="scan_subnet" class="form-label">Subred a Escanear (ej: 192.168.1.0/24)</label>
                             <input type="text" class="form-control" id="scan_subnet" name="scan_subnet" required>
@@ -190,6 +213,11 @@
                         <div class="mb-3">
                             <label for="network_interface" class="form-label">Interfaz de Red</label>
                             <input type="text" class="form-control" id="network_interface" name="network_interface" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="scan_interval_seconds" class="form-label">Intervalo de Escaneo (segundos)</label>
+                            <input type="number" class="form-control" id="scan_interval_seconds" name="scan_interval_seconds" min="10" required>
+                            <div class="form-text">Frecuencia con la que el worker buscará nuevos dispositivos y aplicará reglas. Mínimo 10 segundos.</div>
                         </div>
                         <div class="mb-3">
                             <label for="auto_release_threshold_hours" class="form-label">Liberar IPs inactivas después de (horas)</label>
@@ -224,7 +252,6 @@
         <div id="logs-view" class="d-none">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h2 class="mb-0">Logs de Actividad</h2>
-                <!-- INICIO DE MODIFICACIÓN: Dropdown de filtro -->
                 <div class="d-flex align-items-center">
                     <label for="log-filter-select" class="form-label me-2 mb-0">Filtrar por:</label>
                     <select class="form-select" id="log-filter-select" style="width: auto;">
@@ -236,7 +263,6 @@
                         <option value="system_error">Errores del Sistema</option>
                     </select>
                 </div>
-                <!-- FIN DE MODIFICACIÓN -->
             </div>
             <div class="list-group" id="logs-list">
                 <!-- Las entradas del log se insertarán aquí con JavaScript -->
