@@ -1,19 +1,21 @@
-# DHCP Sentinel
+# DHCP Sentinel 🛡️
 
 DHCP Sentinel es un auditor de red que trabaja junto a tu servidor DHCP existente. Su misión es simple: recuperar direcciones IP no utilizadas para evitar que el pool de tu DHCP se agote. La aplicación identifica dispositivos que han estado inactivos por mucho tiempo o que pertenecen a una lista específica (ej. invitados) y envía una solicitud de liberación (DHCPRELEASE) en su nombre, manteniendo así el pool de direcciones IP limpio y disponible.
 
-## Características
+## ✨ Características Principales
 
--   **Panel de Control Centralizado**: Un dashboard limpio que muestra una lista ordenable y con búsqueda de todos los dispositivos descubiertos, junto con estadísticas clave (total de dispositivos, activos, IPs liberadas).
--   **Descubrimiento Activo de Dispositivos**: Escanea la red periódicamente usando Nmap para descubrir hosts activos, sus direcciones MAC y fabricantes, manteniendo la lista de dispositivos siempre actualizada.
--   **Liberación Manual de IP**: Fuerza un `DHCPRELEASE` para la IP de cualquier dispositivo directamente desde la interfaz de usuario, ideal para acciones inmediatas.
--   **Automatización Inteligente de Liberación**:
-    -   **Por Inactividad**: Libera automáticamente las IPs de dispositivos que han estado inactivos durante un número de horas definido por el usuario.
-    -   **Por Lista de MACs**: Libera automáticamente las IPs de dispositivos cuya dirección MAC coincide con una lista configurable (útil para dispositivos de invitados o IoT que no necesitan una IP permanente).
--   **Exclusión de Dispositivos Críticos**: Protege equipos importantes (como servidores, impresoras o puntos de acceso) marcándolos como "excluidos" para que nunca sean afectados por las acciones de liberación automática.
--   **Acceso Seguro**: Toda la aplicación está protegida por un sistema de login con usuario y contraseña.
--   **Registro de Eventos**: Todas las acciones importantes (escaneos, liberaciones manuales y automáticas, errores) se registran y se pueden visualizar dentro de la aplicación.
--   **Modo Simulación (Dry Run)**: Permite ejecutar la aplicación en un modo seguro que registra las acciones que *tomaría* sin ejecutarlas realmente, perfecto para pruebas y configuración inicial.
+-   `📊` **Panel de Control Centralizado**: Un dashboard limpio que muestra una lista con búsqueda, ordenación y paginación de todos los dispositivos descubiertos, junto con estadísticas clave en tiempo real.
+-   `🔍` **Descubrimiento de Red Flexible**: Utiliza Nmap para un escaneo activo, un sniffer DHCP para descubrimiento pasivo, o ambos métodos combinados para una visibilidad completa de la red.
+-   `⚙️` **Automatización Inteligente y Segura**:
+    -   **Por Inactividad**: Libera automáticamente las IPs de dispositivos inactivos según un umbral de horas configurable.
+    -   **Por Lista de MACs**: Libera IPs de dispositivos cuya MAC coincida con una lista (ideal para invitados o IoT).
+    -   **Política de Liberación Segura**: Opcionalmente, puede verificar si un host responde a `ping` antes de liberar su IP para evitar desconexiones accidentales.
+-   `🛡️` **Protección de Dispositivos Críticos**: Protege equipos importantes (servidores, impresoras, etc.) marcándolos como "excluidos" para que nunca sean afectados por las reglas de liberación automática.
+-   `👆` **Acciones Manuales Instantáneas**: Libera una IP o excluye un dispositivo con un solo clic directamente desde la interfaz de usuario.
+-   `📈` **Estadísticas Históricas**: Visualiza gráficos sobre la evolución de las liberaciones de IP y el crecimiento de dispositivos en la red a lo largo del tiempo (7, 30 o 90 días).
+-   `📝` **Registro Detallado de Eventos**: Todas las acciones importantes (descubrimientos, liberaciones, cambios de configuración, errores) se registran y se pueden consultar con filtros desde la aplicación.
+-   `🔒` **Seguridad Integrada**: El acceso a la aplicación está protegido por un sistema de login con credenciales y protección contra ataques CSRF.
+-   `🧪` **Modo Simulación (Dry Run)**: Permite ejecutar la aplicación en un modo seguro que registra las acciones que *tomaría* sin ejecutarlas realmente, perfecto para pruebas y configuración inicial.
 
 ## Vistas de la Aplicación
 
@@ -32,16 +34,17 @@ DHCP Sentinel es un auditor de red que trabaja junto a tu servidor DHCP existent
 
 El sistema opera con dos componentes principales: la **Interfaz Web** (manejada por Flask) y un **Worker en Segundo Plano** (`scanner_worker.py`).
 
--   La **Interfaz Web** te permite ver el estado de la red y realizar acciones manuales inmediatas.
+-   La **Interfaz Web** te permite ver el estado de la red, cambiar la configuración y realizar acciones manuales inmediatas.
 -   El **Worker en Segundo Plano** es el motor de la automatización. Se ejecuta en un bucle constante para descubrir dispositivos y aplicar las reglas de liberación que hayas configurado.
 
-### El Ciclo del Worker (cada 60 segundos)
+### El Ciclo del Worker
 
-El `scanner_worker.py` realiza las siguientes tareas en cada ciclo:
+El `scanner_worker.py` realiza las siguientes tareas en cada ciclo (el intervalo es configurable):
 
-1.  **Fase de Descubrimiento**: Lanza un escaneo Nmap en la subred configurada para encontrar dispositivos activos.
-2.  **Fase de Sincronización**: Actualiza la base de datos con los dispositivos encontrados. Si un dispositivo conocido es visto, se actualiza su marca de tiempo `last_seen`. Si es un dispositivo nuevo, se añade a la base de datos.
+1.  **Fase de Descubrimiento**: Según el método configurado, lanza un escaneo Nmap, escucha paquetes DHCP, o ambos.
+2.  **Fase de Sincronización**: Actualiza la base de datos con los dispositivos encontrados. Si un dispositivo conocido es visto, se actualiza su marca de tiempo `last_seen`. Si es un dispositivo nuevo, se añade.
 3.  **Fase de Automatización**: Revisa la lista de dispositivos y aplica las reglas de liberación automática (ver tabla abajo).
+4.  **Fase de Mantenimiento**: Actualiza las estadísticas diarias y marca visualmente los dispositivos como inactivos si no se han visto recientemente.
 
 ### Acciones Manuales (Desde la Interfaz Web)
 
@@ -68,7 +71,7 @@ Estas son las reglas que el worker aplica automáticamente en cada ciclo.
 -   **Backend**: Flask, SQLAlchemy, Flask-Login, Flask-Bcrypt
 -   **Redes**: Scapy, python-nmap
 -   **Base de Datos**: SQLite (a través de Flask-SQLAlchemy y Flask-Migrate)
--   **Frontend**: Bootstrap 5, Day.js
+-   **Frontend**: Bootstrap 5, Day.js, Chart.js
 
 ## Instrucciones de Instalación
 
@@ -211,6 +214,6 @@ Este proceso se encargará del descubrimiento de dispositivos y las liberaciones
 
 ## TO-DO (Próximas Mejoras)
 
-*   [x] **Añadir el período de escaneo a la configuración:** Permitir al usuario modificar el `SCAN_INTERVAL_SECONDS` (actualmente fijo en 60 segundos) desde la interfaz web para ofrecer más flexibilidad.
-*   [ ] En Sniffer pasivo, enviar pings para actualizar el dashboard y ver si están activos.
-*   [ ] Implementar notificaciones (ej. por email o Telegram) para eventos críticos.
+*   [x] **Añadir el período de escaneo a la configuración:** Permitir al usuario modificar el `scan_interval_seconds` desde la interfaz web para ofrecer más flexibilidad.
+*   [ ] En el modo Sniffer pasivo, enviar pings periódicos a los dispositivos para actualizar su estado `active`/`inactive` en el dashboard de forma más precisa.
+*   [ ] Implementar notificaciones (ej. por email o Telegram) para eventos críticos como errores graves del worker.
