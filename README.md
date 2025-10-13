@@ -165,6 +165,8 @@ La aplicación requiere que dos procesos se ejecuten en dos terminales diferente
 # Asegúrate de que tu entorno virtual está activo
 source venv/bin/activate
 
+sudo setcap cap_net_raw=eip $(readlink -f venv/bin/python)
+
 # Inicia el servidor web de Flask
 venv/bin/python run.py
 ```
@@ -209,6 +211,6 @@ Este proceso se encargará del descubrimiento de dispositivos y las liberaciones
 
 ## TO-DO (Próximas Mejoras)
 
-*   [ ] **Añadir el período de escaneo a la configuración:** Permitir al usuario modificar el `SCAN_INTERVAL_SECONDS` (actualmente fijo en 60 segundos) desde la interfaz web para ofrecer más flexibilidad.
-*   [ ] Añadir soporte para múltiples subredes de escaneo.
+*   [x] **Añadir el período de escaneo a la configuración:** Permitir al usuario modificar el `SCAN_INTERVAL_SECONDS` (actualmente fijo en 60 segundos) desde la interfaz web para ofrecer más flexibilidad.
+*   [ ] En Sniffer pasivo, enviar pings para actualizar el dashboard y ver si están activos.
 *   [ ] Implementar notificaciones (ej. por email o Telegram) para eventos críticos.
