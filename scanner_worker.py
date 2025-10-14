@@ -197,9 +197,28 @@ def update_inactive_devices_status():
         print(f"[!!!] ERROR al actualizar estados a inactivo: {e}")
         db.session.rollback()
 
-def run_scan_cycle(app_config):
-    """Realiza un ciclo de escaneo Nmap y actualiza el pico de activos del día."""
+# --- [NUEVA FUNCIÓN] ---
+def update_daily_active_peak():
+    """
+    Calcula el número de dispositivos activos y actualiza el pico del día.
+    Esta función es independiente del método de descubrimiento.
+    """
     global daily_stats
+    try:
+        threshold = datetime.now(UTC) - timedelta(minutes=INACTIVE_THRESHOLD_MINUTES)
+        current_active_count = Device.query.filter(Device.last_seen > threshold).count()
+
+        if current_active_count > daily_stats.get("active_devices_peak", 0):
+            old_peak = daily_stats.get("active_devices_peak", 0)
+            daily_stats["active_devices_peak"] = current_active_count
+            print(f"[*] Nuevo pico de dispositivos activos hoy: {current_active_count} (anterior: {old_peak})")
+
+    except Exception as e:
+        print(f"[!!!] ERROR al actualizar el pico de dispositivos activos: {e}")
+
+
+def run_scan_cycle(app_config):
+    """Realiza un ciclo de escaneo Nmap."""
     print("--- Iniciando ciclo de escaneo Nmap ---")
     
     if not app_config.scan_subnet:
@@ -208,12 +227,9 @@ def run_scan_cycle(app_config):
 
     discovered_hosts = discover_hosts(app_config.scan_subnet)
     
+    # La lógica del pico de activos se ha movido a update_daily_active_peak()
+    # para que funcione con todos los modos de descubrimiento.
     if discovered_hosts is not None:
-        current_active_count = len(discovered_hosts)
-        if current_active_count > daily_stats.get("active_devices_peak", 0):
-            daily_stats["active_devices_peak"] = current_active_count
-            print(f"[*] Nuevo pico de dispositivos activos hoy: {current_active_count}")
-
         sync_devices_db(discovered_hosts)
 
 def run_auto_release_cycle(app_config):
@@ -373,6 +389,10 @@ if __name__ == '__main__':
 
                 update_inactive_devices_status()
                 
+                # --- [NUEVA LLAMADA] ---
+                # Ahora actualizamos el pico de activos en cada ciclo, sin importar el modo.
+                update_daily_active_peak()
+
                 if config.discovery_method in ['nmap', 'both']:
                     run_scan_cycle(config)
                 
