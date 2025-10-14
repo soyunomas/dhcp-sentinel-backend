@@ -37,3 +37,9 @@
     white-space: nowrap;
     width: 1%; /* Truco para que la columna ocupe solo el espacio necesario para su contenido */
 }
+
+/* === [MODIFICADO] ESTILO PARA EL LOGO EN LA PÁGINA DE LOGIN === */
+.login-logo {
+    max-width: 150px; /* Limita el ancho del logo para que no sea demasiado grande */
+    height: auto;     /* Mantiene la proporción de la imagen */
+}
